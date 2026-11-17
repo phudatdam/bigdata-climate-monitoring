@@ -2,6 +2,9 @@ topics:
   - name: weather.raw.stream
     partitions: 3
     replication_factor: 1
+  - name: weather.raw.batch
+    partitions: 3
+    replication_factor: 1
   - name: weather.raw.dlq
     partitions: 3
     replication_factor: 1

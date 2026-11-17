@@ -261,7 +261,7 @@ def normalize_air_quality(record_raw: dict[str, Any], source: Optional[str] = No
 
     if "data" in record_raw and source_name == "aqicn":
         data = record_raw["data"]
-        city = (data.get("city") or {}).get("name")
+        city = record_raw.get("city") or (data.get("city") or {}).get("name")
         geo = (data.get("city") or {}).get("geo") or [None, None]
         latitude = geo[0]
         longitude = geo[1]

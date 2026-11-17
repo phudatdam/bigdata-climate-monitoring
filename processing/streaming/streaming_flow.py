@@ -1,249 +1,431 @@
+from __future__ import annotations
+
+import json
+import logging
 import os
-import sys
-import math
+import time
+from pathlib import Path
 
-if "ARROW_PRE_0_15_IPC_FORMAT" in os.environ:
-    del os.environ["ARROW_PRE_0_15_IPC_FORMAT"]
-
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.append(ROOT_DIR)
-
-os.environ["PYSPARK_SUBMIT_ARGS"] = "--driver-java-options -Djava.security.manager=allow pyspark-shell"
-
-import pandas as pd
-from pyspark.sql import SparkSession
+from dotenv import load_dotenv
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
-from pyspark.sql.types import TimestampType
-from processing.configs import config
-from processing.schemas.schemas import get_weather_schema, get_air_schema
-from processing.utils.utils_features import apply_l1_l2_transforms
-from processing.ml.inference import load_all_forecast_models, apply_ml_predictions
+from pyspark.sql.types import DoubleType, StringType, StructField, StructType
 
-STATION_HISTORY = {}
-GLOBAL_ML_MODELS = None
-IS_FIRST_WRITE = True
-HISTORY_COLS = [
-    "timestamp", "latitude", "longitude", "region", "city",
-    "pressure", "wind_U", "wind_V", "temp_c", "pm2_5",
-    "humidity", "wind_speed", "wind_dir", "precipitation",
-    "cloud_cover", "shortwave_radiation", "soil_temperature"
+from Ingestion.utils.locations import OPEN_METEO_LOCATIONS
+
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+load_dotenv(ROOT_DIR / ".env")
+
+LOGGER = logging.getLogger("climate_stream_processor")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+DEFAULT_TOPICS = "weather.raw.stream,air_quality.raw.stream"
+DEFAULT_KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
+DEFAULT_MONGODB_URI = "mongodb://localhost:27017"
+DEFAULT_MONGODB_DATABASE = "climate_db"
+DEFAULT_LIVE_COLLECTION = "realtime_observations"
+DEFAULT_HISTORY_COLLECTION = "climate_observations"
+DEFAULT_CHECKPOINT_DIR = str(ROOT_DIR / "checkpoint" / "processing_stream")
+MONGO_CONNECTOR_PACKAGE = "org.mongodb.spark:mongo-spark-connector_2.12:10.4.0"
+SPARK_PACKAGES = (
+    "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,"
+    f"{MONGO_CONNECTOR_PACKAGE}"
+)
+CITY_LOCATIONS = [
+    (str(location["city"]), float(location["latitude"]), float(location["longitude"]))
+    for location in OPEN_METEO_LOCATIONS
 ]
-HISTORY_SIZE = 12
+CITY_ALIASES = {
+    str(name).strip().lower(): city
+    for location in OPEN_METEO_LOCATIONS
+    for city in [str(location["city"])]
+    for name in (city, location.get("alias", city))
+}
+CITY_ALIASES["ha noi"] = "Hanoi"
 
-def read_kafka_source(spark: SparkSession):
-    return spark.readStream \
-        .format("kafka") \
-        .option("kafka.bootstrap.servers", config.KAFKA_SERVERS) \
-        .option("subscribe", config.KAFKA_TOPIC) \
-        .option("startingOffsets", "earliest") \
-        .option("failOnDataLoss", "false") \
-        .load()
 
-def parse_split_and_join(raw_stream):
-    json_stream = raw_stream.selectExpr("CAST(value AS STRING) as json_str")
+def canonical_city(city: str | None, latitude: float | None, longitude: float | None) -> str | None:
+    if city:
+        canonical = CITY_ALIASES.get(city.strip().lower())
+        if canonical:
+            return canonical
 
-    weather_stream = json_stream \
-        .filter(F.col("json_str").contains("weather")) \
-        .select(F.from_json("json_str", get_weather_schema()).alias("data")).select("data.*") \
-        .withColumn("w_station_id", F.lower(F.trim(F.col("city")))) \
-        .withColumn("w_time", F.col("event_time").cast(TimestampType())) \
-        .withWatermark("w_time", "15 minutes")
+    if latitude is None or longitude is None:
+        return city.strip() if city and city.strip() else None
 
-    air_stream = json_stream \
-        .filter(F.col("json_str").contains("air")) \
-        .select(F.from_json("json_str", get_air_schema()).alias("data")).select("data.*") \
-        .withColumn("a_station_id", F.lower(F.trim(F.col("city")))) \
-        .withColumn("a_time", F.col("event_time").cast(TimestampType())) \
-        .withWatermark("a_time", "15 minutes")
+    nearest_city, nearest_latitude, nearest_longitude = min(
+        CITY_LOCATIONS,
+        key=lambda location: (location[1] - latitude) ** 2 + (location[2] - longitude) ** 2,
+    )
+    distance_squared = (nearest_latitude - latitude) ** 2 + (nearest_longitude - longitude) ** 2
+    if distance_squared <= 1.0:
+        return nearest_city
+    return city.strip() if city and city.strip() else None
 
-    joined_stream = weather_stream.join(
-        air_stream,
-        F.expr("""
-            w_station_id = a_station_id AND
-            w_time >= a_time - interval 15 minutes AND
-            w_time <= a_time + interval 15 minutes
-        """),
-        how="outer"
+
+canonical_city_udf = F.udf(canonical_city, StringType())
+
+RECORD_SCHEMA = StructType(
+    [
+        StructField("event_id", StringType()),
+        StructField("source", StringType()),
+        StructField("region", StringType()),
+        StructField("city", StringType()),
+        StructField("station_id", StringType()),
+        StructField("latitude", DoubleType()),
+        StructField("longitude", DoubleType()),
+        StructField("event_time", StringType()),
+        StructField("ingestion_time", StringType()),
+        StructField("temperature_c", DoubleType()),
+        StructField("humidity", DoubleType()),
+        StructField("pressure_hpa", DoubleType()),
+        StructField("surface_pressure_hpa", DoubleType()),
+        StructField("wind_speed_mps", DoubleType()),
+        StructField("wind_direction_deg", DoubleType()),
+        StructField("precipitation_mm", DoubleType()),
+        StructField("cloud_cover_pct", DoubleType()),
+        StructField("shortwave_radiation_wm2", DoubleType()),
+        StructField("soil_temperature_0_to_7cm_c", DoubleType()),
+        StructField("weather_main", StringType()),
+        StructField("weather_desc", StringType()),
+        StructField("aqi", DoubleType()),
+        StructField("quality_level", StringType()),
+        StructField("pm25", DoubleType()),
+        StructField("pm10", DoubleType()),
+        StructField("co", DoubleType()),
+        StructField("no2", DoubleType()),
+        StructField("so2", DoubleType()),
+        StructField("o3", DoubleType()),
+        StructField("data_version", StringType()),
+    ]
+)
+
+
+def build_feature_frame(kafka_stream: DataFrame) -> DataFrame:
+    """Parse Kafka messages or exported Kafka envelopes into dashboard observations."""
+    topic_column = "topic" if "topic" in kafka_stream.columns else "kafka_topic"
+    value_type = kafka_stream.schema["value"].dataType
+    value_json = (
+        F.to_json(F.col("value"))
+        if isinstance(value_type, StructType)
+        else F.col("value").cast("string")
+    )
+    if "timestamp" in kafka_stream.columns:
+        kafka_timestamp = F.col("timestamp").cast("timestamp")
+    elif "kafka_timestamp_ms" in kafka_stream.columns:
+        kafka_timestamp = F.timestamp_millis(F.col("kafka_timestamp_ms"))
+    else:
+        kafka_timestamp = F.lit(None).cast("timestamp")
+    parsed = (
+        kafka_stream.select(
+            F.col(topic_column).cast("string").alias("kafka_topic"),
+            F.from_json(value_json, RECORD_SCHEMA).alias("record"),
+            kafka_timestamp.alias("kafka_timestamp"),
+        )
+        .select("kafka_topic", "kafka_timestamp", "record.*")
+        .withColumn("city", canonical_city_udf("city", "latitude", "longitude"))
+        .withColumn("station_id", F.lower(F.trim(F.col("city"))))
+        .withColumn("timestamp", F.to_timestamp("event_time"))
+        .withColumn("ingestion_timestamp", F.to_timestamp("ingestion_time"))
+        .withColumn(
+            "event_to_ingestion_seconds",
+            F.col("ingestion_timestamp").cast("double") - F.col("timestamp").cast("double"),
+        )
+        .withColumn(
+            "ingestion_to_kafka_seconds",
+            F.col("kafka_timestamp").cast("double") - F.col("ingestion_timestamp").cast("double"),
+        )
+        .withColumn(
+            "event_to_kafka_seconds",
+            F.col("kafka_timestamp").cast("double") - F.col("timestamp").cast("double"),
+        )
+        .withColumn(
+            "is_weather",
+            F.col("kafka_topic").isin("weather.raw.stream", "weather.raw.batch"),
+        )
+        .withColumn("is_air_quality", F.col("kafka_topic") == "air_quality.raw.stream")
+        .withColumn("temp_c", F.col("temperature_c"))
+        .withColumn("pressure", F.col("pressure_hpa"))
+        .withColumn("wind_speed", F.col("wind_speed_mps"))
+        .withColumn("wind_dir", F.col("wind_direction_deg"))
+        .withColumn("precipitation", F.col("precipitation_mm"))
+        .withColumn("cloud_cover", F.col("cloud_cover_pct"))
+        .withColumn("soil_temperature", F.col("soil_temperature_0_to_7cm_c"))
+        .withColumn("shortwave_radiation", F.col("shortwave_radiation_wm2"))
+        .withColumn("pm2_5", F.col("pm25"))
+        .withColumn("us_aqi", F.col("aqi"))
+        .withColumn(
+            "_valid_record",
+            F.col("station_id").isNotNull()
+            & (F.col("station_id") != "")
+            & F.col("timestamp").isNotNull()
+            & F.col("source").isNotNull()
+            & (
+                (F.col("is_weather") & F.col("temp_c").isNotNull())
+                | (F.col("is_air_quality") & (F.col("pm2_5").isNotNull() | F.col("us_aqi").isNotNull()))
+            )
+        )
     )
 
-    unified_stream = joined_stream.select(
-        F.coalesce(weather_stream["latitude"], air_stream["latitude"]).alias("latitude"),
-        F.coalesce(weather_stream["longitude"], air_stream["longitude"]).alias("longitude"),
-        F.coalesce(weather_stream["region"], air_stream["region"], F.lit("unknown")).alias("region"),
-        F.coalesce(weather_stream["city"], air_stream["city"], F.lit("unknown")).alias("city"),
-        
-        F.col("temperature_c").alias("temp_c"),
-        F.col("humidity").alias("humidity"),
-        F.col("pressure_hpa").alias("pressure"),
-        F.col("wind_speed_mps").alias("wind_speed"),
-        F.col("wind_direction_deg").alias("wind_dir"),
-        F.col("precipitation_mm").alias("precipitation"),
-        F.col("cloud_cover_pct").alias("cloud_cover"),
-        F.col("shortwave_radiation_wm2").alias("shortwave_radiation"),
-        F.col("soil_temperature_0_to_7cm_c").alias("soil_temperature"),
-        F.col("pm25").alias("pm2_5"),
-        F.col("aqi").alias("us_aqi"),
-        F.coalesce(weather_stream["w_station_id"], air_stream["a_station_id"]).alias("station_id"),
-        F.coalesce(weather_stream["w_time"], air_stream["a_time"]).alias("timestamp")
+    radians = F.lit(3.141592653589793) / 180.0
+    valid_humidity = F.col("humidity").between(0.1, 100.0)
+    gamma = F.log(F.col("humidity") / 100.0) + (
+        17.625 * F.col("temp_c") / (243.04 + F.col("temp_c"))
+    )
+    latitude_radians = F.col("latitude") * radians
+    longitude_radians = F.col("longitude") * radians
+    vietnam_timestamp = F.from_utc_timestamp(F.col("timestamp"), "Asia/Ho_Chi_Minh")
+    valid_air_density = (
+        F.col("pressure").isNotNull()
+        & (F.col("pressure") > 0)
+        & F.col("temp_c").isNotNull()
+        & (F.col("temp_c") > -273.15)
     )
 
-    unified_stream = unified_stream.withColumn("hour", F.hour(F.col("timestamp"))) \
-        .withColumn("day_of_year", F.dayofyear(F.col("timestamp"))) \
-        .withColumn("hour_sin", F.sin(2 * math.pi * F.col("hour") / 24)) \
-        .withColumn("hour_cos", F.cos(2 * math.pi * F.col("hour") / 24)) \
-        .withColumn("day_sin", F.sin(2 * math.pi * F.col("day_of_year") / 365)) \
-        .withColumn("day_cos", F.cos(2 * math.pi * F.col("day_of_year") / 365))
+    return (
+        parsed.withColumn(
+            "coord_X",
+            F.when(
+                F.col("latitude").isNotNull() & F.col("longitude").isNotNull(),
+                F.cos(latitude_radians) * F.cos(longitude_radians),
+            ),
+        )
+        .withColumn(
+            "coord_Y",
+            F.when(
+                F.col("latitude").isNotNull() & F.col("longitude").isNotNull(),
+                F.cos(latitude_radians) * F.sin(longitude_radians),
+            ),
+        )
+        .withColumn(
+            "coord_Z",
+            F.when(
+                F.col("latitude").isNotNull(),
+                F.sin(latitude_radians),
+            ),
+        )
+        .withColumn(
+            "air_density",
+            F.when(
+                valid_air_density,
+                (F.col("pressure") * 100.0)
+                / (287.05 * (F.col("temp_c") + 273.15)),
+            ),
+        )
+        .withColumn(
+            "hour_sin",
+            F.sin(2.0 * 3.141592653589793 * F.hour(vietnam_timestamp) / 24.0),
+        )
+        .withColumn(
+            "hour_cos",
+            F.cos(2.0 * 3.141592653589793 * F.hour(vietnam_timestamp) / 24.0),
+        )
+        .withColumn(
+            "day_sin",
+            F.sin(2.0 * 3.141592653589793 * F.dayofyear(vietnam_timestamp) / 365.0),
+        )
+        .withColumn(
+            "wind_U",
+            F.when(
+                F.col("is_weather"),
+                -F.col("wind_speed") * F.sin(F.col("wind_dir") * radians),
+            ),
+        )
+        .withColumn(
+            "wind_V",
+            F.when(
+                F.col("is_weather"),
+                -F.col("wind_speed") * F.cos(F.col("wind_dir") * radians),
+            ),
+        )
+        .withColumn(
+            "dew_point",
+            F.when(
+                F.col("is_weather")
+                & valid_humidity
+                & F.col("temp_c").isNotNull()
+                & (F.col("temp_c") > -243.04),
+                243.04 * gamma / (17.625 - gamma),
+            ),
+        )
+        .withColumn(
+            "is_stagnant_air",
+            F.when(
+                F.col("is_weather")
+                & F.col("wind_speed").isNotNull()
+                & F.col("pressure").isNotNull(),
+                (F.col("wind_speed") < 1.0) & (F.col("pressure") > 1010.0),
+            ),
+        )
+        .withColumn(
+            "cooling_degree_days",
+            F.when(
+                F.col("is_weather") & F.col("temp_c").isNotNull(),
+                F.greatest(F.col("temp_c") - 24.0, F.lit(0.0)),
+            ),
+        )
+        .withColumn(
+            "_id",
+            F.concat_ws(
+                "|",
+                F.col("station_id"),
+                F.date_format("timestamp", "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"),
+                F.col("source"),
+            ),
+        )
+        .select(
+            "_id",
+            "station_id",
+            "city",
+            "region",
+            "latitude",
+            "longitude",
+            "timestamp",
+            "ingestion_timestamp",
+            "kafka_timestamp",
+            "event_to_ingestion_seconds",
+            "ingestion_to_kafka_seconds",
+            "event_to_kafka_seconds",
+            "source",
+            F.col("data_version").alias("schema_version"),
+            "temp_c",
+            "humidity",
+            "pressure",
+            "wind_speed",
+            "wind_dir",
+            "precipitation",
+            "cloud_cover",
+            "soil_temperature",
+            "shortwave_radiation",
+            "pm2_5",
+            "us_aqi",
+            "coord_X",
+            "coord_Y",
+            "coord_Z",
+            "air_density",
+            "hour_sin",
+            "hour_cos",
+            "day_sin",
+            "dew_point",
+            "wind_U",
+            "wind_V",
+            "is_stagnant_air",
+            "cooling_degree_days",
+            "_valid_record",
+        )
+    )
 
 
-    unified_stream = unified_stream.dropna(subset=["station_id", "timestamp", "latitude", "longitude"])
-    return unified_stream
+def write_observation_batch(batch: DataFrame, batch_id: int) -> None:
+    batch_started = time.perf_counter()
+    batch.persist()
+    try:
+        invalid_count = batch.filter(
+            F.coalesce(~F.col("_valid_record"), F.lit(True))
+        ).count()
+        if invalid_count:
+            LOGGER.warning("Discarded %s invalid records in Kafka micro-batch %s", invalid_count, batch_id)
 
-def apply_l3_with_driver_state(batch_pdf: pd.DataFrame) -> pd.DataFrame:
-    global STATION_HISTORY
-    result_parts = []
+        valid_batch = batch.filter(F.col("_valid_record")).drop("_valid_record")
+        valid_count = valid_batch.count()
+        if valid_count == 0:
+            LOGGER.info("Skipping empty or invalid Kafka micro-batch %s", batch_id)
+            return
 
-    for station_id, group in batch_pdf.groupby("station_id"):
-        group = group.sort_values("timestamp").reset_index(drop=True)
-        history = STATION_HISTORY.get(station_id, pd.DataFrame(columns=HISTORY_COLS))
+        latency_row = valid_batch.agg(
+            F.expr(
+                "percentile_approx(event_to_ingestion_seconds, array(0.5, 0.95), 1000)"
+            ).alias("event_to_ingestion_seconds_p50_p95"),
+            F.expr(
+                "percentile_approx(ingestion_to_kafka_seconds, array(0.5, 0.95), 1000)"
+            ).alias("ingestion_to_kafka_seconds_p50_p95"),
+            F.expr(
+                "percentile_approx(event_to_kafka_seconds, array(0.5, 0.95), 1000)"
+            ).alias("event_to_kafka_seconds_p50_p95"),
+        ).first().asDict()
+        mongo_uri = os.getenv("MONGODB_URI", DEFAULT_MONGODB_URI)
+        database = os.getenv("MONGODB_DATABASE", DEFAULT_MONGODB_DATABASE)
+        collections = [
+            os.getenv("MONGODB_LIVE_COLLECTION", DEFAULT_LIVE_COLLECTION),
+            os.getenv("MONGODB_HISTORY_COLLECTION", DEFAULT_HISTORY_COLLECTION),
+        ]
 
-        if not history.empty:
-            hist_subset = history[HISTORY_COLS].copy()
-            for col in group.columns:
-                if col not in hist_subset.columns:
-                    hist_subset[col] = None
-            combined = pd.concat([hist_subset, group], ignore_index=True)
-        else:
-            combined = group.copy()
+        for collection in collections:
+            (
+                valid_batch.write.format("mongodb")
+                .mode("append")
+                .option("connection.uri", mongo_uri)
+                .option("database", database)
+                .option("collection", collection)
+                .option("operationType", "replace")
+                .option("idFieldList", "_id")
+                .option("upsertDocument", "true")
+                .save()
+            )
 
-        combined = combined.sort_values("timestamp").reset_index(drop=True)
+        LOGGER.info(
+            "Wrote %s observations from Kafka micro-batch %s to %s",
+            valid_count,
+            batch_id,
+            ", ".join(f"{database}.{collection}" for collection in collections),
+        )
+        LOGGER.info(
+            "pipeline_metrics %s",
+            json.dumps(
+                {
+                    "stage": "spark_to_mongo",
+                    "batch_id": batch_id,
+                    "records": valid_count,
+                    "duration_seconds": round(time.perf_counter() - batch_started, 3),
+                    **latency_row,
+                },
+                sort_keys=True,
+                default=str,
+            ),
+        )
+    finally:
+        batch.unpersist()
 
-        for col in ["pressure", "wind_U", "wind_V", "temp_c", "pm2_5"]:
-            if col in combined.columns:
-                combined[col] = combined[col].ffill().bfill()
 
-        combined["pressure_delta_3h"] = combined["pressure"].diff(3).fillna(0.0).astype("float64")
-        combined["wind_shear_U"]      = combined["wind_U"].diff(1).fillna(0.0).astype("float64")
-        combined["wind_shear_V"]      = combined["wind_V"].diff(1).fillna(0.0).astype("float64")
-        combined["temp_mean_6h"]      = combined["temp_c"].rolling(window=6, min_periods=1).mean().fillna(0.0).astype("float64")
-        combined["pm25_acc_12h"]      = combined["pm2_5"].rolling(window=12, min_periods=1).sum().fillna(0.0).astype("float64")
+def main() -> None:
+    bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", DEFAULT_KAFKA_BOOTSTRAP_SERVERS)
+    topics = [topic.strip() for topic in os.getenv("KAFKA_TOPICS", DEFAULT_TOPICS).split(",") if topic.strip()]
+    if not topics:
+        raise ValueError("KAFKA_TOPICS must contain at least one Kafka topic")
 
-        n_new = len(group)
-        result_part = combined.tail(n_new).reset_index(drop=True)
-
-        all_rows = combined[HISTORY_COLS].copy()
-        STATION_HISTORY[station_id] = all_rows.tail(HISTORY_SIZE).reset_index(drop=True)
-
-        result_parts.append(result_part)
-
-    if result_parts:
-        return pd.concat(result_parts, ignore_index=True)
-    else:
-        return pd.DataFrame()
-
-def process_batch(batch_df, batch_id):
-    global GLOBAL_ML_MODELS, IS_FIRST_WRITE
-    if batch_df.isEmpty():
-        return
-
-    batch_pdf = batch_df.toPandas()
-    batch_pdf = apply_l3_with_driver_state(batch_pdf)
-
-    if batch_pdf.empty:
-        return
-
-    spark = SparkSession.getActiveSession()
-
-    for col in ["pressure_delta_3h", "wind_shear_U", "wind_shear_V", "temp_mean_6h", "pm25_acc_12h"]:
-        if col in batch_pdf.columns:
-            batch_pdf[col] = batch_pdf[col].astype(float)
-
-    if "timestamp" in batch_pdf.columns:
-        batch_pdf["timestamp"] = pd.to_datetime(batch_pdf["timestamp"]).dt.strftime("%Y-%m-%d %H:%M:%S")
-
-    l3_df = spark.createDataFrame(batch_pdf)
-    l3_df = l3_df.withColumn("timestamp", F.to_timestamp(F.col("timestamp")))
-
-    # Định dạng các cột số học
-    all_numeric_cols = ["us_aqi", "pm2_5", "humidity", "wind_speed", "wind_dir",
-                        "precipitation", "cloud_cover", "shortwave_radiation", "soil_temperature",
-                        "pressure_delta_3h", "wind_shear_U", "wind_shear_V", "temp_mean_6h", "pm25_acc_12h",
-                        "hour_sin", "hour_cos", "day_sin", "day_cos"]
-    
-    for col_name in all_numeric_cols:
-        if col_name in l3_df.columns:
-            l3_df = l3_df.withColumn(col_name, F.col(col_name).cast("double"))
-    
-    l3_df.cache()
-
-    print(f"[Batch {batch_id}] Ghi dữ liệu quan trắc vào MongoDB...")
-    obs_cols = [c for c in config.OBSERVATION_COLS if c in l3_df.columns]
-    
-    # GHI ĐÈ (OVERWRITE) cho OBSERVATIONS
-    current_mode = "append"
-    if config.SPARK_LOAD_MODE == "overwrite":
-        if IS_FIRST_WRITE:
-            current_mode = "overwrite"  
-            IS_FIRST_WRITE = False      
-        else:
-            current_mode = "append"     
-    else:
-        current_mode = "append"
-
-    print(f"[Batch {batch_id}] Ghi dữ liệu quan trắc vào MongoDB (Mode: {current_mode})...")
-    obs_cols = [c for c in config.OBSERVATION_COLS if c in l3_df.columns]
-    
-    # GHI OBSERVATIONS
-    l3_df.select(*obs_cols).write \
-        .format("mongodb") \
-        .mode(current_mode) \
-        .option("spark.mongodb.write.connection.uri", config.MONGO_STREAM_OBS_URI) \
-        .save()
-
-    if GLOBAL_ML_MODELS is None or len(GLOBAL_ML_MODELS) < 36:
-        print(f"[Batch {batch_id}] Đang tải mô hình...")
-        GLOBAL_ML_MODELS = load_all_forecast_models(config.MLFLOW_TRACKING_URI, GLOBAL_ML_MODELS)
-
-    print(f"[Batch {batch_id}] Chạy dự đoán...")
-    alert_df = apply_ml_predictions(l3_df, GLOBAL_ML_MODELS)
-
-    if alert_df is not None and not alert_df.isEmpty():
-        print(f"[Batch {batch_id}] Đang ghi {alert_df.count()} bản ghi dự đoán vào MongoDB (Mode: {current_mode})...")
-        
-        # GHI ALERTS
-        alert_df.write \
-            .format("mongodb") \
-            .mode(current_mode) \
-            .option("spark.mongodb.write.connection.uri", config.MONGO_STREAM_ALERTS_URI) \
-            .save()
-
-    l3_df.unpersist()
-
-def main():
-    os.environ["ARROW_PRE_0_15_IPC_FORMAT"] = "0"
-
-    spark = SparkSession.builder \
-        .appName("Weather_Streaming_Predictive_Pipeline") \
-        .config("spark.sql.execution.arrow.pyspark.enabled", "true") \
-        .config("spark.sql.execution.arrow.pyspark.fallback.enabled", "true") \
-        .config("spark.sql.session.timeZone", "UTC") \
+    checkpoint_dir = os.getenv("SPARK_CHECKPOINT_DIR", DEFAULT_CHECKPOINT_DIR)
+    spark = (
+        SparkSession.builder.appName("ClimateObservationStream")
+        .config("spark.sql.session.timeZone", "UTC")
+        .config("spark.jars.packages", SPARK_PACKAGES)
         .getOrCreate()
-
+    )
     spark.sparkContext.setLogLevel("WARN")
 
-    print("[*] Khởi động Pipeline Streaming...")
-    raw_stream = read_kafka_source(spark)
-
-    l0_stream = parse_split_and_join(raw_stream)
-    l1_l2_stream = apply_l1_l2_transforms(l0_stream)
-
-    query = l1_l2_stream.writeStream \
-        .foreachBatch(process_batch) \
-        .outputMode("append") \
-        .trigger(processingTime="1 minute") \
-        .option("checkpointLocation", config.CHECKPOINT_DIR) \
+    LOGGER.info(
+        "Starting Kafka-to-MongoDB processing: brokers=%s topics=%s checkpoint=%s",
+        bootstrap_servers,
+        topics,
+        checkpoint_dir,
+    )
+    kafka_stream = (
+        spark.readStream.format("kafka")
+        .option("kafka.bootstrap.servers", bootstrap_servers)
+        .option("subscribe", ",".join(topics))
+        .option("startingOffsets", os.getenv("KAFKA_STARTING_OFFSETS", "latest"))
+        .option("failOnDataLoss", "false")
+        .load()
+    )
+    observations = build_feature_frame(kafka_stream)
+    query = (
+        observations.writeStream.foreachBatch(write_observation_batch)
+        .outputMode("append")
+        .option("checkpointLocation", checkpoint_dir)
         .start()
-
+    )
     query.awaitTermination()
+
 
 if __name__ == "__main__":
     main()

@@ -52,6 +52,7 @@ data/
 checkpoint/
 checkpoints/
 exports/
+archive/
 output/
 outputs/
 tmp/
@@ -74,6 +75,13 @@ airflow-webserver.pid
 *.json
 *.jsonl
 *.csv
+# Runtime payloads are ignored above; keep application manifests and TS configs tracked.
+!backend/package.json
+!backend/package-lock.json
+!backend/tsconfig.json
+!frontend/package.json
+!frontend/package-lock.json
+!frontend/tsconfig.json
 
 # Image
 images/

@@ -4,6 +4,8 @@ import { ForecastDashboard } from "./components/ForecastDashboard";
 import { LocationSelector } from "./components/LocationSelector";
 import { useWeatherData } from "./hooks/useWeatherData";
 import { useForecastData } from "./hooks/useForecastData";
+import { getVietnamDateAndHour } from "./utils/observationTime";
+import { HistoryBrowser } from "./components/HistoryBrowser";
 
 const locations = [
   { id: "angiang", name: "An Giang" },
@@ -71,10 +73,11 @@ const locations = [
   { id: "yenbai", name: "Yen Bai" }
 ];
 
-const TODAY = new Date().toISOString().slice(0, 10);
-const CURRENT_HOUR = new Date().getHours();
+const INITIAL_VIETNAM_TIME = getVietnamDateAndHour();
+const TODAY = INITIAL_VIETNAM_TIME.date;
+const CURRENT_HOUR = INITIAL_VIETNAM_TIME.hour;
 
-type Tab = 'overview' | 'forecast';
+type Tab = 'overview' | 'history' | 'forecast';
 
 export default function App() {
   const [selectedLocation, setSelectedLocation] = useState("hanoi");
@@ -120,8 +123,7 @@ export default function App() {
                   onChange={(e) => {
                     const d = e.target.value || TODAY;
                     setSelectedDate(d);
-                    // When switching to today, snap hour to current; otherwise start at noon
-                    setSelectedHour(d === TODAY ? CURRENT_HOUR : 12);
+                    setSelectedHour(d === TODAY ? getVietnamDateAndHour().hour : 12);
                   }}
                   className="border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
@@ -148,7 +150,11 @@ export default function App() {
                 </div>
                 {!isLive && (
                   <button
-                    onClick={() => { setSelectedDate(TODAY); setSelectedHour(CURRENT_HOUR); }}
+                    onClick={() => {
+                      const current = getVietnamDateAndHour();
+                      setSelectedDate(current.date);
+                      setSelectedHour(current.hour);
+                    }}
                     className="px-3 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 whitespace-nowrap"
                   >
                     Back to Live
@@ -171,7 +177,7 @@ export default function App() {
 
           {/* Tabs */}
           <div className="flex border-b border-gray-200">
-            {([['overview', 'Overview'], ['forecast', '6-Hour Forecast']] as [Tab, string][]).map(([id, label]) => (
+            {([['overview', 'Overview'], ['history', 'History'], ['forecast', '6-Hour Forecast']] as [Tab, string][]).map(([id, label]) => (
               <button
                 key={id}
                 onClick={() => setActiveTab(id)}
@@ -185,6 +191,10 @@ export default function App() {
               </button>
             ))}
           </div>
+
+          {activeTab === 'history' && (
+            <HistoryBrowser locationId={selectedLocation} locationName={locationName} />
+          )}
 
           {/* ── Overview tab ── */}
           {activeTab === 'overview' && (
@@ -218,7 +228,7 @@ export default function App() {
                 </div>
               )}
               {!loading && !error && data && (
-                <WeatherDashboard data={data} locationName={locationName} selectedHour={selectedHour} />
+                <WeatherDashboard data={data} locationName={locationName} />
               )}
             </>
           )}
@@ -245,7 +255,7 @@ export default function App() {
               )}
               {!forecastLoading && !forecastError && !forecastData && (
                 <div className="rounded-lg border border-gray-200 bg-gray-50 p-10 text-center text-gray-500">
-                  No forecast data available for {locationName} on {selectedDate} at {String(selectedHour).padStart(2, '0')}:00.
+                  No forecast data is available yet for {locationName}. Forecasting will be enabled after the ML models are connected.
                 </div>
               )}
               {!forecastLoading && !forecastError && forecastData && (

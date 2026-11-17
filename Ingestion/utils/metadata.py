@@ -9,6 +9,10 @@ def build_cycle_id(prefix: str) -> str:
     return f"{prefix}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}"
 
 
+def build_batch_id(prefix: str, start_date: str, end_date: str) -> str:
+    return f"{prefix}_{start_date}_{end_date}"
+
+
 def enrich_ingestion_metadata(
     record: dict[str, Any],
     pipeline_name: str,

@@ -15,7 +15,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from producers.dlq_producer import build_dlq_message, send_to_dlq
-from producers.kafka_producer import build_producer, produce_json_message
+from producers.kafka_producer import build_producer, enqueue_json_message
 from utils.logger import get_logger, log_event
 from utils.locations import OPEN_METEO_LOCATIONS, filter_locations, location_names
 from utils.metadata import build_batch_id, enrich_ingestion_metadata
@@ -54,7 +54,7 @@ def fetch_weather_history(location: dict[str, Any], start_date: str, end_date: s
             "wind_speed_10m,wind_direction_10m,precipitation,cloud_cover,"
             "shortwave_radiation,soil_temperature_0_to_7cm,weather_code"
         ),
-        "timezone": "Asia/Bangkok",
+        "timezone": "UTC",
     }
 
     def make_request() -> dict[str, Any]:
@@ -112,8 +112,34 @@ def main() -> None:
     success_count = 0
     failed_count = 0
     skipped_duplicates = 0
+    delivery_failures: list[dict[str, Any]] = []
+    delivered_by_city: dict[str, int] = {}
     started_at = datetime.now(UTC).isoformat()
     batch_id = build_batch_id("weather_batch", args.start_date, args.end_date)
+
+    def handle_delivery(
+        error: Any,
+        kafka_message: Any,
+        city: str,
+        event_time: str,
+        raw_payload: dict[str, Any],
+        normalized_payload: dict[str, Any],
+    ) -> None:
+        nonlocal success_count, failed_count
+        if error is not None:
+            failed_count += 1
+            delivery_failures.append(
+                {
+                    "city": city,
+                    "event_time": event_time,
+                    "error": str(error),
+                    "raw_payload": raw_payload,
+                    "normalized_payload": normalized_payload,
+                }
+            )
+            return
+        success_count += 1
+        delivered_by_city[city] = delivered_by_city.get(city, 0) + 1
 
     log_event(
         LOGGER,
@@ -145,6 +171,7 @@ def main() -> None:
                 )
                 continue
 
+            city_failed_before = failed_count
             for raw_record in iter_hourly_weather_records(payload, city=location["city"]):
                 try:
                     normalized = normalize_weather(raw_record, source="open-meteo").dict()
@@ -195,27 +222,28 @@ def main() -> None:
                         )
                         continue
 
-                    metadata = produce_json_message(
+                    normalized_payload = serialize_record(normalized)
+                    enriched = enrich_ingestion_metadata(
+                        normalized_payload,
+                        pipeline_name=PIPELINE_NAME,
+                        batch_id=batch_id,
+                        source_endpoint=OPEN_METEO_ARCHIVE_URL,
+                    )
+                    enqueue_json_message(
                         producer,
                         topic=args.topic,
                         key=f"region_{normalized['region']}",
-                        message=enrich_ingestion_metadata(
-                            serialize_record(normalized),
-                            pipeline_name=PIPELINE_NAME,
-                            batch_id=batch_id,
-                            source_endpoint=OPEN_METEO_ARCHIVE_URL,
+                        message=enriched,
+                        on_delivery=lambda error, kafka_message, city=normalized["city"], event_time=normalized["event_time"].isoformat(), raw=raw_record, record=normalized_payload: handle_delivery(
+                            error,
+                            kafka_message,
+                            city,
+                            event_time,
+                            raw,
+                            record,
                         ),
                     )
                     seen_keys.add(dedup_key)
-                    success_count += 1
-                    log_event(
-                        LOGGER,
-                        "weather_record_produced",
-                        city=normalized["city"],
-                        event_time=normalized["event_time"],
-                        partition=metadata["partition"],
-                        offset=metadata["offset"],
-                    )
                 except Exception as exc:
                     failed_count += 1
                     log_event(LOGGER, "weather_record_failed", city=location["city"], error=str(exc))
@@ -229,9 +257,40 @@ def main() -> None:
                         city=location["city"],
                         topic=args.topic,
                     )
+            remaining_messages = producer.flush(timeout=30.0)
+            if remaining_messages:
+                failed_count += remaining_messages
+                log_event(
+                    LOGGER,
+                    "weather_delivery_flush_incomplete",
+                    city=location["city"],
+                    remaining_messages=remaining_messages,
+                )
+            for delivery_failure in delivery_failures:
+                _send_dlq_event(
+                    producer,
+                    dlq_topic=args.dlq_topic,
+                    batch_id=batch_id,
+                    error_type="delivery_failed",
+                    error_message=delivery_failure["error"],
+                    raw_payload=delivery_failure["raw_payload"],
+                    normalized_payload=delivery_failure["normalized_payload"],
+                    city=delivery_failure["city"],
+                    event_time=delivery_failure["event_time"],
+                    topic=args.topic,
+                )
+            delivery_failures.clear()
+            log_event(
+                LOGGER,
+                "weather_location_batch_completed",
+                city=location["city"],
+                produced_count=delivered_by_city.get(location["city"], 0),
+                failed_count=failed_count - city_failed_before,
+                event_count=len(payload.get("hourly", {}).get("time", [])),
+            )
             time.sleep(args.sleep_seconds)
     finally:
-        producer.flush()
+        producer.flush(timeout=30.0)
 
     log_event(
         LOGGER,
@@ -244,6 +303,8 @@ def main() -> None:
         skipped_duplicates=skipped_duplicates,
         finished_at=datetime.now(UTC).isoformat(),
     )
+    if failed_count:
+        raise SystemExit(1)
 
 
 def _validate_date_range(start_date_text: str, end_date_text: str) -> None:

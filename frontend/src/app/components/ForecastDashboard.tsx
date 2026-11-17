@@ -4,6 +4,7 @@ import {
 } from 'recharts';
 import type { ForecastData, ForecastHour } from '../types/weather';
 import { ForecastAdvisories } from './ForecastAdvisories';
+import { formatVietnamTimestamp } from '../utils/observationTime';
 
 interface ForecastDashboardProps {
   data: ForecastData;
@@ -33,10 +34,14 @@ function pm25Category(v: number | null): { label: string; color: string } {
 }
 
 // Build chart data: base hour (actual) + h+1 to h+6 (forecast)
-function buildChartData(current: ForecastData['current'], hours: ForecastHour[], baseTime: string) {
+function buildChartData(
+  current: ForecastData['current'],
+  hours: ForecastHour[],
+  baseTimestamp: string,
+) {
   return [
     {
-      time: baseTime,
+      timestamp: baseTimestamp,
       temperature:   current.temperature,
       precipitation: current.precipitation,
       pressure:      current.pressure,
@@ -45,7 +50,7 @@ function buildChartData(current: ForecastData['current'], hours: ForecastHour[],
       cloudCover:    current.cloudCover,
     },
     ...hours.map((h) => ({
-      time:          h.time,
+      timestamp:    h.timestamp,
       temperature:   h.temperature,
       precipitation: h.precipitation,
       pressure:      h.pressure,
@@ -57,15 +62,14 @@ function buildChartData(current: ForecastData['current'], hours: ForecastHour[],
 }
 
 export function ForecastDashboard({ data, locationName }: ForecastDashboardProps) {
-  const chartData = buildChartData(data.current, data.hours, data.baseTime);
-  const mockTime = `${String(new Date().getHours()).padStart(2, '0')}:00`;
+  const chartData = buildChartData(data.current, data.hours, data.baseTimestamp);
   
   return (
     <div className="space-y-6">
       {/* Base info banner */}
       <div className="bg-blue-50 border border-blue-200 rounded-lg px-5 py-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-sm text-blue-800">
         <span>Forecast base: <strong>{locationName}</strong></span>
-        <span>Reference hour: <strong>{mockTime}</strong></span>
+        <span>Reference hour: <strong>{data.baseTime}</strong></span>
         <span className="text-blue-500 italic">Values for +1h through +6h ahead</span>
       </div>
 
@@ -73,13 +77,11 @@ export function ForecastDashboard({ data, locationName }: ForecastDashboardProps
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
         {data.hours.map((h) => {
           const pm25 = pm25Category(h.pm25);
-          const mockFuture = `${String(new Date().getHours() + h.hour).padStart(2, '0')}:00`;
           return (
-            <div key={h.hour} className="bg-white rounded-lg shadow p-4 flex flex-col gap-2">
+            <div key={h.timestamp} className="bg-white rounded-lg shadow p-4 flex flex-col gap-2">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-medium text-gray-500">+{h.hour}h</span>
-                {/*<span className="text-sm font-semibold text-gray-800">{h.time}</span>*/}
-                <span className="text-sm font-semibold text-gray-800">{mockFuture}</span>
+                <span className="text-sm font-semibold text-gray-800">{h.time}</span>
               </div>
               <div className="text-2xl font-bold text-gray-900 text-center py-1">
                 {h.temperature !== null ? `${fmt(h.temperature)} °C` : '—'}
@@ -122,7 +124,7 @@ export function ForecastDashboard({ data, locationName }: ForecastDashboardProps
           <ResponsiveContainer width="100%" height={220}>
             <LineChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis dataKey="time" tick={{ fontSize: 12 }} stroke="#6b7280" />
+              <XAxis dataKey="timestamp" tick={{ fontSize: 12 }} stroke="#6b7280" tickFormatter={formatVietnamTimestamp} />
               <YAxis tick={{ fontSize: 12 }} stroke="#6b7280" />
               <Tooltip contentStyle={{ backgroundColor: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px' }} />
               <Line type="monotone" dataKey="temperature" stroke="#ef4444" strokeWidth={2} dot={{ r: 4 }} name="Temp (°C)" />
@@ -136,7 +138,7 @@ export function ForecastDashboard({ data, locationName }: ForecastDashboardProps
           <ResponsiveContainer width="100%" height={220}>
             <LineChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis dataKey="time" tick={{ fontSize: 12 }} stroke="#6b7280" />
+              <XAxis dataKey="timestamp" tick={{ fontSize: 12 }} stroke="#6b7280" tickFormatter={formatVietnamTimestamp} />
               <YAxis tick={{ fontSize: 12 }} stroke="#6b7280" />
               <Tooltip contentStyle={{ backgroundColor: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px' }} />
               <Line type="monotone" dataKey="pm25" stroke="#10b981" strokeWidth={2} dot={{ r: 4 }} name="PM2.5 (µg/m³)" />
@@ -150,7 +152,7 @@ export function ForecastDashboard({ data, locationName }: ForecastDashboardProps
           <ResponsiveContainer width="100%" height={220}>
             <LineChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis dataKey="time" tick={{ fontSize: 12 }} stroke="#6b7280" />
+              <XAxis dataKey="timestamp" tick={{ fontSize: 12 }} stroke="#6b7280" tickFormatter={formatVietnamTimestamp} />
               <YAxis tick={{ fontSize: 12 }} stroke="#6b7280" />
               <Tooltip contentStyle={{ backgroundColor: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px' }} />
               <Line type="monotone" dataKey="windSpeed" stroke="#6366f1" strokeWidth={2} dot={{ r: 4 }} name="Wind (m/s)" />
@@ -164,7 +166,7 @@ export function ForecastDashboard({ data, locationName }: ForecastDashboardProps
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis dataKey="time" tick={{ fontSize: 12 }} stroke="#6b7280" />
+              <XAxis dataKey="timestamp" tick={{ fontSize: 12 }} stroke="#6b7280" tickFormatter={formatVietnamTimestamp} />
               <YAxis tick={{ fontSize: 12 }} stroke="#6b7280" />
               <Tooltip contentStyle={{ backgroundColor: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px' }} />
               <Bar dataKey="precipitation" fill="#3b82f6" name="Precip. (mm)" radius={[3, 3, 0, 0]} />
@@ -179,7 +181,7 @@ export function ForecastDashboard({ data, locationName }: ForecastDashboardProps
         <ResponsiveContainer width="100%" height={200}>
           <LineChart data={chartData}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-            <XAxis dataKey="time" tick={{ fontSize: 12 }} stroke="#6b7280" />
+            <XAxis dataKey="timestamp" tick={{ fontSize: 12 }} stroke="#6b7280" tickFormatter={formatVietnamTimestamp} />
             <YAxis tick={{ fontSize: 12 }} stroke="#6b7280" domain={['auto', 'auto']} />
             <Tooltip contentStyle={{ backgroundColor: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px' }} />
             <Legend />

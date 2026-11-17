@@ -90,3 +90,18 @@ def produce_json_message(
     if not delivery_result:
         raise RuntimeError("Kafka delivery callback did not return metadata")
     return delivery_result
+
+
+def enqueue_json_message(
+    producer: Any,
+    topic: str,
+    message: dict[str, Any],
+    key: str | None = None,
+    on_delivery: Any = None,
+) -> None:
+    producer.produce(
+        topic=topic,
+        key=key.encode("utf-8") if isinstance(key, str) else key,
+        value=json.dumps(message, ensure_ascii=True, default=str).encode("utf-8"),
+        on_delivery=on_delivery,
+    )

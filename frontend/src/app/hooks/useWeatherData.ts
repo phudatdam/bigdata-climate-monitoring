@@ -11,6 +11,8 @@ interface UseWeatherDataResult {
 
 function hourlyToCurrentWeather(h: HourlyData): CurrentWeather {
   return {
+    source: h.source,
+    schemaVersion: h.schemaVersion,
     temperature:        h.temperature,
     humidity:           h.humidity,
     windSpeed:          h.windSpeed,
@@ -21,21 +23,26 @@ function hourlyToCurrentWeather(h: HourlyData): CurrentWeather {
     soilTemperature:    h.soilTemperature,
     shortwaveRadiation: h.shortwaveRadiation,
     condition:          h.condition,
+    timestamp:          h.timestamp,
   };
 }
 
 // Finds the hourly entry whose time label is closest to `hour` (0-23).
-function pickHour(hourly: HourlyData[], hour: number): HourlyData | null {
+function pickHour(hourly: HourlyData[], hour: number, date?: string): HourlyData | null {
   if (!hourly.length) return null;
-  const target = `${String(hour).padStart(2, '0')}:00`;
-  // Exact match first
-  const exact = hourly.find((h) => h.time === target);
-  if (exact) return exact;
-  // Otherwise nearest by hour number
-  return hourly.reduce((best, h) => {
-    const hNum = parseInt(h.time.slice(0, 2), 10);
-    const bNum = parseInt(best.time.slice(0, 2), 10);
-    return Math.abs(hNum - hour) < Math.abs(bNum - hour) ? h : best;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Bangkok',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const todayInVietnam = `${parts.find((part) => part.type === 'year')?.value}-${parts.find((part) => part.type === 'month')?.value}-${parts.find((part) => part.type === 'day')?.value}`;
+  const targetDate = date ?? todayInVietnam;
+  const target = new Date(`${targetDate}T${String(hour).padStart(2, '0')}:00:00+07:00`).getTime();
+  return hourly.reduce((best, entry) => {
+    const distance = Math.abs(new Date(entry.timestamp).getTime() - target);
+    const bestDistance = Math.abs(new Date(best.timestamp).getTime() - target);
+    return distance < bestDistance ? entry : best;
   });
 }
 
@@ -86,7 +93,7 @@ export function useWeatherData(locationId: string, date?: string, hour?: number)
 
     const selectedHourly =
       hour !== undefined
-        ? pickHour(hourlyCache, hour)
+        ? pickHour(hourlyCache, hour, date)
         : hourlyCache[hourlyCache.length - 1] ?? null;
 
     if (!selectedHourly) return null;
@@ -96,7 +103,7 @@ export function useWeatherData(locationId: string, date?: string, hour?: number)
       hourly:     hourlyCache,
       airQuality: airQualityCache,
     };
-  }, [hourlyCache, airQualityCache, hour]);
+  }, [hourlyCache, airQualityCache, date, hour]);
 
   return { data, loading, error, refetch: load };
 }

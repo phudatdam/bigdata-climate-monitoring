@@ -10,6 +10,7 @@ import {
   ReferenceLine,
 } from "recharts";
 import type { AirQualityData } from "../types/weather";
+import { formatVietnamTimestamp, getObservationFreshness } from "../utils/observationTime";
 
 interface AirQualityChartProps {
   data: AirQualityData[];
@@ -20,7 +21,8 @@ export function AirQualityChart({
   data,
   selectedEntry,
 }: AirQualityChartProps) {
-  const display = selectedEntry ?? data[data.length - 1];
+  const display = selectedEntry === undefined ? data[data.length - 1] ?? null : selectedEntry;
+  const freshness = display ? getObservationFreshness(display.timestamp) : null;
 
   return (
     <div className="bg-white rounded-lg shadow p-6">
@@ -35,9 +37,10 @@ export function AirQualityChart({
             stroke="#e5e7eb"
           />
           <XAxis
-            dataKey="time"
+            dataKey="timestamp"
             stroke="#6b7280"
             tick={{ fontSize: 12 }}
+            tickFormatter={formatVietnamTimestamp}
           />
           <YAxis
             stroke="#6b7280"
@@ -45,6 +48,7 @@ export function AirQualityChart({
             domain={[0, "auto"]}
           />
           <Tooltip
+            labelFormatter={(value) => formatVietnamTimestamp(String(value))}
             contentStyle={{
               backgroundColor: "#fff",
               border: "1px solid #e5e7eb",
@@ -60,9 +64,9 @@ export function AirQualityChart({
             strokeWidth={2}
             name="PM2.5 (µg/m³)"
           />
-          {display?.time && (
+          {display?.timestamp && (
             <ReferenceLine
-              x={display.time}
+              x={display.timestamp}
               stroke="#6366f1"
               strokeDasharray="4 3"
               strokeWidth={2}
@@ -75,29 +79,36 @@ export function AirQualityChart({
         <div className="p-3 bg-gray-50 rounded-lg">
           <p className="text-xs text-gray-600">PM2.5</p>
           <p className="text-lg font-semibold text-gray-900">
-            {display?.pm25.toFixed(2) ?? "—"} µg/m³
+            {display?.pm25?.toFixed(2) ?? "—"} µg/m³
           </p>
         </div>
         <div className="p-3 bg-gray-50 rounded-lg">
           <p className="text-xs text-gray-600">
-            PM2.5 Acc. (12h)
+            PM2.5 Mean (12h)
           </p>
           <p className="text-lg font-semibold text-gray-900">
-            {display?.pm25Acc12h.toFixed(2) ?? "—"} µg/m³
+            {display?.pm25Mean12h?.toFixed(2) ?? "—"} µg/m³
           </p>
         </div>
         <div
-          className={`p-3 rounded-lg ${display?.isStagnantAir ? "bg-orange-50" : "bg-green-50"}`}
+          className={`p-3 rounded-lg ${display?.isStagnantAir === null || !display ? "bg-gray-50" : display.isStagnantAir ? "bg-orange-50" : "bg-green-50"}`}
         >
           <p className="text-xs text-gray-600">Stagnant Air</p>
           <p
-            className={`text-lg font-semibold ${display?.isStagnantAir ? "text-orange-600" : "text-green-600"}`}
+            className={`text-lg font-semibold ${display?.isStagnantAir === null || !display ? "text-gray-500" : display.isStagnantAir ? "text-orange-600" : "text-green-600"}`}
           >
-            {display?.isStagnantAir
-              ? "Yes — poor dispersion"
-              : "No"}
+            {display?.isStagnantAir === null || !display
+              ? "Unavailable"
+              : display.isStagnantAir
+                ? "Yes — poor dispersion"
+                : "No"}
           </p>
         </div>
+        <p className="mt-3 text-xs text-gray-500" aria-live="polite">
+          {display
+            ? `Selected AQI reading: ${display.source ?? "unknown source"} · ${formatVietnamTimestamp(display.timestamp)} ICT · ${freshness === "recent" ? "recent" : freshness === "stale" ? "stale" : "freshness unknown"}`
+            : "No AQI reading within 90 minutes of the selected weather observation."}
+        </p>
       </div>
     </div>
   );

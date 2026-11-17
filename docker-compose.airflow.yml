@@ -1,3 +1,4 @@
+# Legacy, unsupported scaffold. Use scripts/run_historical_batch.ps1 for local scheduling.
 services:
   airflow-postgres:
     image: postgres:16-alpine
@@ -21,9 +22,6 @@ services:
       AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/Ingestion/airflow
       _PIP_ADDITIONAL_REQUIREMENTS: "confluent-kafka==2.13.2 requests==2.32.5 PyYAML==6.0.3 pydantic==1.10.22 psycopg2-binary==2.9.10"
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      OWM_API_KEY: ${OWM_API_KEY:-}
-      AQICN_API_KEY: ${AQICN_API_KEY:-}
-      IQAIR_API_KEY: ${IQAIR_API_KEY:-}
     user: "50000:0"
     entrypoint: /bin/bash
     command:
@@ -56,9 +54,6 @@ services:
       AIRFLOW__WEBSERVER__DEFAULT_UI_TIMEZONE: Asia/Bangkok
       _PIP_ADDITIONAL_REQUIREMENTS: "confluent-kafka==2.13.2 requests==2.32.5 PyYAML==6.0.3 pydantic==1.10.22 psycopg2-binary==2.9.10"
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      OWM_API_KEY: ${OWM_API_KEY:-}
-      AQICN_API_KEY: ${AQICN_API_KEY:-}
-      IQAIR_API_KEY: ${IQAIR_API_KEY:-}
     user: "50000:0"
     command: webserver
     ports:
@@ -81,9 +76,6 @@ services:
       AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/Ingestion/airflow
       _PIP_ADDITIONAL_REQUIREMENTS: "confluent-kafka==2.13.2 requests==2.32.5 PyYAML==6.0.3 pydantic==1.10.22 psycopg2-binary==2.9.10"
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      OWM_API_KEY: ${OWM_API_KEY:-}
-      AQICN_API_KEY: ${AQICN_API_KEY:-}
-      IQAIR_API_KEY: ${IQAIR_API_KEY:-}
     user: "50000:0"
     command: scheduler
     volumes:

@@ -1,91 +1,50 @@
-version: '3.8'
+services:
+  processor:
+    build:
+      context: ..
+      dockerfile: processing/Dockerfile
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_TOPICS: weather.raw.stream,air_quality.raw.stream
+      KAFKA_STARTING_OFFSETS: latest
+      MONGODB_URI: mongodb://mongodb:27017
+      MONGODB_DATABASE: climate_db
+      MONGODB_LIVE_COLLECTION: realtime_observations
+      MONGODB_HISTORY_COLLECTION: climate_observations
+      SPARK_CHECKPOINT_DIR: /var/lib/climate/checkpoint
+      PYSPARK_PYTHON: python
+      PYSPARK_DRIVER_PYTHON: python
+    volumes:
+      - ../checkpoint/processing:/var/lib/climate/checkpoint
+      - ../exports:/workspace/exports:ro
+    networks:
+      - ingestion
+
+  historical-batch:
+    build:
+      context: ..
+      dockerfile: processing/Dockerfile
+    environment:
+      SPARK_MASTER: ${SPARK_MASTER:-local[1]}
+      SPARK_SQL_SHUFFLE_PARTITIONS: ${SPARK_SQL_SHUFFLE_PARTITIONS:-8}
+      MONGODB_URI: mongodb://mongodb:27017
+      MONGODB_DATABASE: climate_db
+      MONGODB_HISTORY_COLLECTION: climate_observations
+      PYSPARK_PYTHON: python
+      PYSPARK_DRIVER_PYTHON: python
+    volumes:
+      - ../exports:/workspace/exports:ro
+      - ../archive:/workspace/archive
+      - ../logs/benchmarks:/workspace/benchmark-reports
+      - historical_ivy_cache:/root/.ivy2
+    networks:
+      - ingestion
+    entrypoint: ["python", "-m", "processing.batch.historical_flow"]
 
 networks:
-  weather-net:
-    driver: bridge
-  ingestion-net:
+  ingestion:
     external: true
     name: ingestion_kafka_network
 
 volumes:
-  namenode-data:
-  datanode-data:
-
-services:
-  namenode:
-    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
-    container_name: namenode
-    networks:
-      - weather-net
-    ports:
-      - "9870:9870"
-      - "8020:8020"
-    environment:
-      - CLUSTER_NAME=weather_cluster
-      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
-    volumes:
-      - namenode-data:/hadoop/dfs/name
-
-  datanode:
-    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
-    container_name: datanode
-    networks:
-      - weather-net
-    environment:
-      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
-    volumes:
-      - datanode-data:/hadoop/dfs/data
-    depends_on:
-      - namenode
-
-  spark-master:
-    image: bitnamilegacy/spark:3.5.1
-    container_name: spark-master
-    networks:
-      - weather-net
-      - ingestion-net
-    environment:
-      - SPARK_MODE=master
-    ports:
-      - "8080:8080"
-      - "7077:7077"
-    volumes:
-      - ../:/workspace
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
-  spark-worker:
-    image: bitnamilegacy/spark:3.5.1
-    container_name: spark-worker
-    networks:
-      - weather-net
-      - ingestion-net
-    environment:
-      - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark-master:7077
-    depends_on:
-      - spark-master
-    volumes:
-      - ./:/workspace
-      - D:/Documents/Data Engineer/Bigdata/ml_models:/ml_models_local
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-      
-airflow-webserver:
-    image: apache/airflow:2.9.0
-    container_name: airflow-webserver
-    restart: always
-    networks:
-      - weather-net
-      - ingestion-net
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./dags:/opt/airflow/dags
-      - ./plugins:/opt/airflow/plugins
-      - ../:/workspace
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=sqlite:////opt/airflow/airflow.db
-      - AIRFLOW__CORE__LOAD_EXAMPLES=False
-    command: bash -c "airflow db init && airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password admin && airflow webserver"
+  historical_ivy_cache:

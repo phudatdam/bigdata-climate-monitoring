@@ -1,13 +1,13 @@
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine } from 'recharts';
 import type { HourlyData } from '../types/weather';
+import { formatVietnamTimestamp } from '../utils/observationTime';
 
 interface TemperatureChartProps {
   data: HourlyData[];
-  selectedHour?: number;
+  selectedTimestamp: string;
 }
 
-export function TemperatureChart({ data, selectedHour }: TemperatureChartProps) {
-  const hourLabel = selectedHour !== undefined ? `${String(selectedHour).padStart(2, '0')}:00` : null;
+export function TemperatureChart({ data, selectedTimestamp }: TemperatureChartProps) {
   return (
     <div className="bg-white rounded-lg shadow p-6">
       <h3 className="text-lg font-semibold text-gray-900 mb-4">Temperature Trends (24 Hours)</h3>
@@ -15,10 +15,10 @@ export function TemperatureChart({ data, selectedHour }: TemperatureChartProps) 
         <LineChart data={data}>
           <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
           <XAxis
-            dataKey="time"
+            dataKey="timestamp"
             stroke="#6b7280"
             tick={{ fontSize: 12 }}
-            tickFormatter={(value) => value.split('-')[0]}
+            tickFormatter={formatVietnamTimestamp}
           />
           <YAxis
             stroke="#6b7280"
@@ -26,6 +26,7 @@ export function TemperatureChart({ data, selectedHour }: TemperatureChartProps) 
             label={{ value: '°C', angle: -90, position: 'insideLeft' }}
           />
           <Tooltip
+            labelFormatter={(value) => formatVietnamTimestamp(String(value))}
             contentStyle={{
               backgroundColor: '#fff',
               border: '1px solid #e5e7eb',
@@ -41,9 +42,7 @@ export function TemperatureChart({ data, selectedHour }: TemperatureChartProps) 
             dot={false}
             name="Temperature (°C)"
           />
-          {hourLabel && (
-            <ReferenceLine x={hourLabel} stroke="#3b82f6" strokeDasharray="4 2" label={{ value: hourLabel, position: 'top', fontSize: 11, fill: '#3b82f6' }} />
-          )}
+          <ReferenceLine x={selectedTimestamp} stroke="#3b82f6" strokeDasharray="4 2" />
         </LineChart>
       </ResponsiveContainer>
     </div>

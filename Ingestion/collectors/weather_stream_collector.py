@@ -41,7 +41,7 @@ from validators.weather_validator import validate_weather_record
 LOGGER = get_logger("weather_stream_collector")
 WEATHER_STREAM_TOPIC = "weather.raw.stream"
 WEATHER_DLQ_TOPIC = "weather.raw.dlq"
-CHECKPOINT_PATH = build_checkpoint_path("weather_stream_checkpoint.json")
+CHECKPOINT_PATH = build_checkpoint_path("weather_stream_checkpoint_v2.json")
 OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 PIPELINE_NAME = "weather_stream_ingestion"
 
@@ -67,7 +67,7 @@ def fetch_weather_current(location: dict[str, Any]) -> dict[str, Any]:
             "wind_speed_10m,wind_direction_10m,precipitation,cloud_cover,"
             "shortwave_radiation,soil_temperature_0_to_10cm,weather_code"
         ),
-        "timezone": "Asia/Bangkok",
+        "timezone": "UTC",
     }
 
     def make_request() -> dict[str, Any]:

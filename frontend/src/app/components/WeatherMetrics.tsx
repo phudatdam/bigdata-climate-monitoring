@@ -6,31 +6,34 @@ interface WeatherMetricsProps {
 }
 
 export function WeatherMetrics({ current }: WeatherMetricsProps) {
+  const display = (value: number | null, suffix: string) =>
+    value === null ? 'Unavailable' : `${value}${suffix}`;
+
   const metrics = [
     {
       label: 'Precipitation',
-      value: `${current.precipitation} mm`,
+      value: display(current.precipitation, ' mm'),
       icon: Droplets,
       color: 'text-blue-500',
       bgColor: 'bg-blue-50',
     },
     {
       label: 'Cloud Cover',
-      value: `${current.cloudCover}%`,
+      value: display(current.cloudCover, '%'),
       icon: Cloud,
       color: 'text-gray-500',
       bgColor: 'bg-gray-50',
     },
     {
       label: 'Soil Temperature',
-      value: `${current.soilTemperature}°C`,
+      value: display(current.soilTemperature, '°C'),
       icon: Thermometer,
       color: 'text-orange-500',
       bgColor: 'bg-orange-50',
     },
     {
       label: 'Solar Radiation',
-      value: `${current.shortwaveRadiation} W/m²`,
+      value: display(current.shortwaveRadiation, ' W/m²'),
       icon: Sun,
       color: 'text-yellow-500',
       bgColor: 'bg-yellow-50',

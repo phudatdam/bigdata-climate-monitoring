@@ -31,7 +31,8 @@ function temperatureAlert(temp: number): Alert | null {
   return null;
 }
 
-function precipitationAlert(precip: number): Alert | null {
+function precipitationAlert(precip: number | null): Alert | null {
+  if (precip === null) return null;
   if (precip > 50)
     return { id: 'precip', severity: 'extreme', title: 'Flash Flood & Landslide Risk', description: `${precip} mm/h — Extremely heavy rain. Evacuate flood-prone and hillside areas immediately.` };
   if (precip >= 7.6)
@@ -43,7 +44,8 @@ function precipitationAlert(precip: number): Alert | null {
   return null;
 }
 
-function windAlert(speed: number): Alert | null {
+function windAlert(speed: number | null): Alert | null {
+  if (speed === null) return null;
   if (speed > 20.8)
     return { id: 'wind', severity: 'extreme', title: 'Severe Storm / Typhoon', description: `${speed} m/s (Beaufort 9+) — Life-threatening. Take shelter immediately.` };
   if (speed >= 17.2)
@@ -55,7 +57,8 @@ function windAlert(speed: number): Alert | null {
   return null;
 }
 
-function cloudAlert(cover: number): Alert | null {
+function cloudAlert(cover: number | null): Alert | null {
+  if (cover === null) return null;
   if (cover > 70)
     return { id: 'cloud', severity: 'info', title: 'Overcast Sky', description: `${cover}% cloud cover — Gloomy conditions, rain likely.` };
   if (cover >= 41)
@@ -65,8 +68,8 @@ function cloudAlert(cover: number): Alert | null {
 
 function pressureDropAlert(current: CurrentWeather, hourly: HourlyData[]): Alert | null {
   if (hourly.length < 3) return null;
-  const strongWind = current.windSpeed >= 10.8;
-  const lowPressure = current.pressure < 1000;
+  const strongWind = current.windSpeed !== null && current.windSpeed >= 10.8;
+  const lowPressure = current.pressure !== null && current.pressure < 1000;
   if (strongWind && lowPressure)
     return {
       id: 'pressure',
@@ -91,7 +94,7 @@ function pm25Alert(pm25: number): Alert | null {
 }
 
 // Solar radiation — day/night indicator and renewable energy tiers
-function solarAlert(radiation: number): Alert {
+function solarAlert(radiation: number): Alert | null {
   if (radiation === 0)
     return { id: 'solar', severity: 'info', title: 'Nighttime', description: 'Solar radiation: 0 W/m² — No solar generation. Night-mode operations active.' };
   if (radiation <= 100)
@@ -127,7 +130,7 @@ export function WeatherAlerts({ current, hourly, latestAirQuality }: WeatherAler
   const pm25 = latestAirQuality?.pm25 ?? null;
 
   const alerts: Alert[] = [
-    temperatureAlert(current.temperature),
+    current.temperature !== null ? temperatureAlert(current.temperature) : null,
     precipitationAlert(current.precipitation),
     windAlert(current.windSpeed),
     cloudAlert(current.cloudCover),
@@ -135,15 +138,27 @@ export function WeatherAlerts({ current, hourly, latestAirQuality }: WeatherAler
     pm25 !== null ? pm25Alert(pm25) : null,
   ].filter((a): a is Alert => a !== null);
 
-  const solar = solarAlert(current.shortwaveRadiation);
+  const solar = current.shortwaveRadiation !== null ? solarAlert(current.shortwaveRadiation) : null;
 
   const skyLabel =
+    current.cloudCover === null ? null :
     current.cloudCover <= 10  ? 'Clear / Sunny' :
     current.cloudCover <= 40  ? 'Partly Cloudy' :
     current.cloudCover <= 70  ? 'Mostly Cloudy' : 'Overcast';
 
   // Alerts that are not purely informational (for the "all clear" check)
   const actionableAlerts = alerts.filter(a => a.severity !== 'info' || a.id === 'pm25');
+  const hasAvailableMeasurements = [
+    current.temperature,
+    current.humidity,
+    current.windSpeed,
+    current.pressure,
+    current.precipitation,
+    current.cloudCover,
+    current.shortwaveRadiation,
+    pm25,
+    latestAirQuality?.aqi ?? null,
+  ].some((value) => value !== null);
 
   return (
     <div className="bg-white rounded-lg shadow p-6 space-y-4">
@@ -154,12 +169,19 @@ export function WeatherAlerts({ current, hourly, latestAirQuality }: WeatherAler
 
       {/* Alert list */}
       {actionableAlerts.length === 0 ? (
-        <div className="flex items-center gap-3 p-4 bg-green-50 border border-green-200 rounded-lg">
-          <span className="text-2xl">✅</span>
+        <div className={`flex items-center gap-3 p-4 rounded-lg border ${hasAvailableMeasurements ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}>
+          <span className="text-2xl">{hasAvailableMeasurements ? '✅' : 'ℹ️'}</span>
           <div>
-            <p className="font-medium text-green-800">All conditions normal</p>
-            <p className="text-sm text-green-700">
-              {current.temperature}°C · {skyLabel} · Wind {current.windSpeed} m/s · Pressure {current.pressure} hPa
+            <p className={`font-medium ${hasAvailableMeasurements ? 'text-green-800' : 'text-gray-700'}`}>
+              {hasAvailableMeasurements ? 'No active alerts in available measurements' : 'Weather measurements unavailable'}
+            </p>
+            <p className={`text-sm ${hasAvailableMeasurements ? 'text-green-700' : 'text-gray-600'}`}>
+              {[current.temperature === null ? null : `${current.temperature}°C`,
+                skyLabel,
+                current.windSpeed === null ? null : `Wind ${current.windSpeed} m/s`,
+                current.pressure === null ? null : `Pressure ${current.pressure} hPa`]
+                .filter(Boolean)
+                .join(' · ') || 'No weather measurements available'}
             </p>
           </div>
         </div>
@@ -186,7 +208,7 @@ export function WeatherAlerts({ current, hourly, latestAirQuality }: WeatherAler
       )}
 
       {/* Informational solar detail (always shown when daytime) */}
-      {current.shortwaveRadiation > 0 && (
+      {current.shortwaveRadiation !== null && current.shortwaveRadiation > 0 && solar && (
         <div className="flex items-start gap-3 p-3 rounded-lg border bg-blue-50 border-blue-200">
           <span className="text-xl mt-0.5 shrink-0">☀️</span>
           <div>
