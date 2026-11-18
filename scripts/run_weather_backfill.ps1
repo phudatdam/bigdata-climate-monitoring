@@ -77,7 +77,36 @@ if ($LASTEXITCODE -ne 0) {
 Select-String -LiteralPath $collectorLog -Pattern "weather_batch_started|weather_batch_completed" |
     ForEach-Object { Write-Output $_.Line }
 
-$topics = @("weather.raw.batch", "weather.raw.stream", "air_quality.raw.stream")
+$airCollectorArguments = @(
+    "Ingestion\collectors\air_quality_batch_collector.py",
+    "--start-date",
+    $StartDate,
+    "--end-date",
+    $EndDate,
+    "--topic",
+    "air_quality.raw.batch"
+)
+if (-not $AllLocations) {
+    $airCollectorArguments += "--locations"
+    $airCollectorArguments += $Locations
+}
+
+$airCollectorLog = Join-Path $logDirectory "air_quality_backfill_$runId.log"
+Write-Output "Fetching $dayCount UTC calendar days for $scope into air_quality.raw.batch."
+& $pythonExecutable @airCollectorArguments *> $airCollectorLog
+if ($LASTEXITCODE -ne 0) {
+    Get-Content -LiteralPath $airCollectorLog -Tail 60
+    throw "Air-quality archive collection failed with exit code $LASTEXITCODE. See $airCollectorLog."
+}
+Select-String -LiteralPath $airCollectorLog -Pattern "air_quality_batch_started|air_quality_batch_completed" |
+    ForEach-Object { Write-Output $_.Line }
+
+$topics = @(
+    "weather.raw.batch",
+    "air_quality.raw.batch",
+    "weather.raw.stream",
+    "air_quality.raw.stream"
+)
 $historicalArguments = @(
     "-NoProfile",
     "-ExecutionPolicy",
@@ -104,4 +133,4 @@ if ($historicalProcess.ExitCode -ne 0) {
     throw "Historical Spark batch failed with exit code $($historicalProcess.ExitCode)."
 }
 
-Write-Output "Weather backfill completed. Collector log: $collectorLog"
+Write-Output "Climate backfill completed. Weather log: $collectorLog; air-quality log: $airCollectorLog"

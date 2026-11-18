@@ -32,8 +32,8 @@ export function getObservationFreshness(
   return ageMinutes > staleAfterMinutes ? 'stale' : 'recent';
 }
 
-export function formatVietnamTimestamp(timestamp: string): string {
-  const date = new Date(timestamp);
+export function formatVietnamTimestamp(timestamp: string | number | Date): string {
+  const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
   if (!Number.isFinite(date.getTime())) return 'Unknown time';
   return new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Asia/Ho_Chi_Minh',

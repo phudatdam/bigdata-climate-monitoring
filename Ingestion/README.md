@@ -69,6 +69,7 @@ The root `docker-compose.airflow.yml` and the old Spark-submit DAG are an unsupp
 - `weather.raw.batch` (historical Open-Meteo archive records; processed by historical batch, not live Spark)
 - `weather.raw.dlq`
 - `air_quality.raw.stream`
+- `air_quality.raw.batch`
 - `air_quality.raw.dlq`
 
 ## Main commands
@@ -111,7 +112,7 @@ python Ingestion\scripts\export_kafka_to_file.py --topics weather.raw.stream air
 
 The exporter writes a sibling manifest containing per-partition offsets, counts, completeness, file size, and SHA-256. A capped export is marked incomplete if it stops before reaching the captured Kafka partition ends; use `--max-messages 0` for an uncapped snapshot.
 
-Run a bounded historical weather backfill from the repository root. The default is Hanoi; use `-AllLocations` for the configured Open-Meteo city catalog. Backfills use UTC event times and a separate Kafka topic, then the wrapper validates/exports records and applies them through the historical Spark batch:
+Run a bounded historical weather and air-quality backfill from the repository root. The default is Hanoi; use `-AllLocations` for the configured Open-Meteo city catalog. Backfills use UTC event times and separate Kafka topics, then the wrapper validates/exports records and applies them through the historical Spark batch:
 
 ```powershell
 .\scripts\run_weather_backfill.ps1 -StartDate 2026-10-12 -EndDate 2026-11-10 -Locations Hanoi

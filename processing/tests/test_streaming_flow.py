@@ -149,6 +149,71 @@ class StreamingFlowTests(unittest.TestCase):
         self.assertTrue(all(row["temp_c"] == 25.0 for row in observations))
         self.assertEqual(observations[0]["_id"], observations[1]["_id"])
 
+    def test_air_quality_batch_topic_uses_the_air_quality_contract(self):
+        record = {
+            "source": "open-meteo",
+            "region": "bac",
+            "city": "Hanoi",
+            "latitude": 21.0285,
+            "longitude": 105.8542,
+            "event_time": "2026-11-01T00:00:00Z",
+            "data_version": "v1",
+            "pm25": 42.5,
+            "pm10": 55.0,
+            "aqi": 119.0,
+        }
+
+        observations = build_feature_frame(
+            self.spark.createDataFrame(
+                [
+                    ("air_quality.raw.batch", json.dumps(record)),
+                    ("air_quality.raw.stream", json.dumps(record)),
+                ],
+                ["topic", "value"],
+            )
+        ).collect()
+
+        self.assertEqual(len(observations), 2)
+        self.assertTrue(all(row["_valid_record"] for row in observations))
+        self.assertTrue(all(row["station_id"] == "hanoi" for row in observations))
+        self.assertTrue(all(row["pm2_5"] == 42.5 for row in observations))
+        self.assertTrue(all(row["us_aqi"] == 119.0 for row in observations))
+        self.assertEqual(observations[0]["_id"], observations[1]["_id"])
+
+    def test_weather_and_air_quality_ids_do_not_collide(self):
+        weather = {
+            "source": "open-meteo",
+            "region": "bac",
+            "city": "Hanoi",
+            "latitude": 21.0285,
+            "longitude": 105.8542,
+            "event_time": "2026-11-01T00:00:00Z",
+            "temperature_c": 25.0,
+        }
+        air = {
+            "source": "open-meteo",
+            "region": "bac",
+            "city": "Hanoi",
+            "latitude": 21.0285,
+            "longitude": 105.8542,
+            "event_time": "2026-11-01T00:00:00Z",
+            "pm25": 42.5,
+            "aqi": 119.0,
+        }
+
+        observations = build_feature_frame(
+            self.spark.createDataFrame(
+                [
+                    ("weather.raw.batch", json.dumps(weather)),
+                    ("air_quality.raw.batch", json.dumps(air)),
+                ],
+                ["topic", "value"],
+            )
+        ).filter("_valid_record").collect()
+
+        self.assertEqual(len(observations), 2)
+        self.assertNotEqual(observations[0]["_id"], observations[1]["_id"])
+
     def test_pipeline_latency_uses_event_ingestion_and_kafka_timestamps(self):
         record = {
             "source": "open-meteo",

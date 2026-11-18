@@ -58,14 +58,14 @@ The historical batch processor reuses the same parser and stateless features as 
 
 The orchestration script also writes immutable raw Kafka-envelope and curated-observation Parquet snapshots under `archive\raw_kafka\` and `archive\curated_observations\`. Each snapshot is partitioned by UTC event date and source (`year`, `month`, `day`, `source`), keyed by the validated export SHA-256, and accompanied by an archive manifest recording source offsets, topic counts, and row count. Reprocessing the identical export reuses its snapshot; it does not overwrite existing Parquet. The raw JSONL remains the auditable source input, and MongoDB remains the serving store.
 
-Open-Meteo historical weather is collected to the separate `weather.raw.batch` topic. Spark's live query intentionally does not subscribe to this topic; export it with retained stream topics and run the historical batch to update `climate_observations`. The bounded PowerShell entry point defaults to Hanoi and accepts at most 31 dates:
+Open-Meteo historical weather and air quality are collected to separate `weather.raw.batch` and `air_quality.raw.batch` topics. Spark's live query intentionally does not subscribe to batch topics; export them with retained stream topics and run the historical batch to update `climate_observations`. The bounded PowerShell entry point defaults to Hanoi and accepts at most 31 dates:
 
 ```powershell
 .\scripts\run_weather_backfill.ps1 -StartDate 2026-10-12 -EndDate 2026-11-10 -Locations Hanoi
 .\scripts\run_weather_backfill.ps1 -StartDate 2026-10-12 -EndDate 2026-11-10 -AllLocations
 ```
 
-The collector requests UTC timestamps so naive archive API hour labels are interpreted correctly by the common schema. The wrapper exports `weather.raw.batch` together with retained weather/AQI stream topics, validates the export manifest, writes raw and curated Parquet, and idempotently upserts historical observations. It never resets live offsets/checkpoints or writes backfill records to realtime collections. All-location runs make one archive request per configured Open-Meteo city; AQI history is not included because the configured AQI sources do not provide this archive collector.
+The collectors request UTC timestamps so naive archive API hour labels are interpreted correctly by the common schema. The wrapper exports both batch topics together with retained weather/AQI stream topics, validates the export manifest, writes raw and curated Parquet, and idempotently upserts historical observations. It never resets live offsets/checkpoints or writes backfill records to realtime collections. All-location runs make one archive request per configured Open-Meteo city for each weather and air-quality API. Weather and AQI use separate deterministic IDs even when the provider timestamp is identical.
 
 Export the Kafka topics to a file from the repository root:
 

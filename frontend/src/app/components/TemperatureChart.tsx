@@ -8,14 +8,23 @@ interface TemperatureChartProps {
 }
 
 export function TemperatureChart({ data, selectedTimestamp }: TemperatureChartProps) {
+  const plotData = data.map((entry) => ({
+    ...entry,
+    timestampMs: new Date(entry.timestamp).getTime(),
+  }));
+  const selectedTimestampMs = new Date(selectedTimestamp).getTime();
+
   return (
     <div className="bg-white rounded-lg shadow p-6">
       <h3 className="text-lg font-semibold text-gray-900 mb-4">Temperature Trends (24 Hours)</h3>
       <ResponsiveContainer width="100%" height={300}>
-        <LineChart data={data}>
+        <LineChart data={plotData}>
           <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
           <XAxis
-            dataKey="timestamp"
+            dataKey="timestampMs"
+            type="number"
+            scale="time"
+            domain={['dataMin', 'dataMax']}
             stroke="#6b7280"
             tick={{ fontSize: 12 }}
             tickFormatter={formatVietnamTimestamp}
@@ -42,7 +51,9 @@ export function TemperatureChart({ data, selectedTimestamp }: TemperatureChartPr
             dot={false}
             name="Temperature (°C)"
           />
-          <ReferenceLine x={selectedTimestamp} stroke="#3b82f6" strokeDasharray="4 2" />
+          {Number.isFinite(selectedTimestampMs) && (
+            <ReferenceLine x={selectedTimestampMs} stroke="#3b82f6" strokeDasharray="4 2" />
+          )}
         </LineChart>
       </ResponsiveContainer>
     </div>

@@ -105,16 +105,23 @@ For this single-machine assignment, Windows Task Scheduler is the supported loca
 
 After the preview succeeds, omit `-DryRun` when scheduling. In Task Scheduler, create a daily task whose action runs `powershell.exe` with arguments `-NoProfile -ExecutionPolicy Bypass -File "C:\path\to\bigdata-climate-monitoring\scripts\run_historical_batch.ps1"`. Inspect the task's last-run result and corresponding transcript in `logs\`; reruns are safe for the same full archive. Avoid scheduling frequent full-topic snapshots unless the retained Kafka volume and available disk/CPU have been checked.
 
-### 3c. Backfill archived weather observations
+### 3c. Backfill archived weather and air-quality observations
 
-Open-Meteo's Archive API can populate historical weather into the durable collection without mixing backfill records into the live stream. The wrapper defaults to Hanoi, limits a run to 31 calendar days, and writes to `weather.raw.batch`; `-AllLocations` requests the full configured city catalog. It then exports the backfill with retained stream history, validates the manifest, writes Parquet snapshots, and upserts `climate_observations`:
+Open-Meteo provides both weather and air-quality archive APIs. The wrapper defaults to Hanoi, limits a run to 31 calendar days, and writes weather to `weather.raw.batch` and air quality to `air_quality.raw.batch`. `-AllLocations` requests the full configured city catalog. It then exports the backfill with retained stream history, validates the manifest, writes Parquet snapshots, and upserts `climate_observations`:
 
 ```powershell
 .\scripts\run_weather_backfill.ps1 -StartDate 2026-10-12 -EndDate 2026-11-10 -Locations Hanoi
 .\scripts\run_weather_backfill.ps1 -StartDate 2026-10-12 -EndDate 2026-11-10 -AllLocations
 ```
 
-Backfilled events are UTC observations and do not populate the realtime collection. This path backfills weather only; AQI history is unavailable from the configured provider collectors.
+Backfilled events are UTC observations and do not populate the realtime collection. The dedicated batch topics are consumed only by the historical batch, never by the live Spark stream.
+
+For a daily incremental 7-day UTC lookback, register and run the Windows scheduled wrapper:
+
+```powershell
+.\scripts\register_backfill_task.ps1 -LookbackDays 7
+.\scripts\run_climate_backfill.ps1 -LookbackDays 7
+```
 
 ### 3d. Browse bounded history
 

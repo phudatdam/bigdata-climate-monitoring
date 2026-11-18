@@ -327,7 +327,11 @@ app.get("/api/history/:locationId", async (req: Request, res: Response) => {
         eventToIngestionSeconds: nullableNumber(doc.event_to_ingestion_seconds),
         ingestionToKafkaSeconds: nullableNumber(doc.ingestion_to_kafka_seconds),
         eventToKafkaSeconds: nullableNumber(doc.event_to_kafka_seconds),
-        recordType: typeof doc.temp_c === 'number' ? 'weather' : 'air_quality',
+        recordType: typeof doc.temp_c === 'number'
+          ? 'weather'
+          : typeof doc.pm2_5 === 'number' || typeof doc.us_aqi === 'number'
+            ? 'air_quality'
+            : 'weather',
         temperature: nullableNumber(doc.temp_c),
         humidity: nullableNumber(doc.humidity),
         pressure: nullableNumber(doc.pressure),

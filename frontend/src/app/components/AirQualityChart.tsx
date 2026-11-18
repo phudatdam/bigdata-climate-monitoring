@@ -23,6 +23,11 @@ export function AirQualityChart({
 }: AirQualityChartProps) {
   const display = selectedEntry === undefined ? data[data.length - 1] ?? null : selectedEntry;
   const freshness = display ? getObservationFreshness(display.timestamp) : null;
+  const plotData = data.map((entry) => ({
+    ...entry,
+    timestampMs: new Date(entry.timestamp).getTime(),
+  }));
+  const displayTimestampMs = display ? new Date(display.timestamp).getTime() : null;
 
   return (
     <div className="bg-white rounded-lg shadow p-6">
@@ -31,13 +36,16 @@ export function AirQualityChart({
       </h3>
 
       <ResponsiveContainer width="100%" height={300}>
-        <ComposedChart data={data}>
+        <ComposedChart data={plotData}>
           <CartesianGrid
             strokeDasharray="3 3"
             stroke="#e5e7eb"
           />
           <XAxis
-            dataKey="timestamp"
+            dataKey="timestampMs"
+            type="number"
+            scale="time"
+            domain={['dataMin', 'dataMax']}
             stroke="#6b7280"
             tick={{ fontSize: 12 }}
             tickFormatter={formatVietnamTimestamp}
@@ -64,9 +72,9 @@ export function AirQualityChart({
             strokeWidth={2}
             name="PM2.5 (µg/m³)"
           />
-          {display?.timestamp && (
+          {displayTimestampMs && (
             <ReferenceLine
-              x={display.timestamp}
+              x={displayTimestampMs}
               stroke="#6366f1"
               strokeDasharray="4 3"
               strokeWidth={2}

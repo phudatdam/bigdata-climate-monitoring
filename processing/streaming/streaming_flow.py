@@ -144,7 +144,10 @@ def build_feature_frame(kafka_stream: DataFrame) -> DataFrame:
             "is_weather",
             F.col("kafka_topic").isin("weather.raw.stream", "weather.raw.batch"),
         )
-        .withColumn("is_air_quality", F.col("kafka_topic") == "air_quality.raw.stream")
+        .withColumn(
+            "is_air_quality",
+            F.col("kafka_topic").isin("air_quality.raw.stream", "air_quality.raw.batch"),
+        )
         .withColumn("temp_c", F.col("temperature_c"))
         .withColumn("pressure", F.col("pressure_hpa"))
         .withColumn("wind_speed", F.col("wind_speed_mps"))
@@ -155,6 +158,12 @@ def build_feature_frame(kafka_stream: DataFrame) -> DataFrame:
         .withColumn("shortwave_radiation", F.col("shortwave_radiation_wm2"))
         .withColumn("pm2_5", F.col("pm25"))
         .withColumn("us_aqi", F.col("aqi"))
+        .withColumn(
+            "_record_type",
+            F.when(F.col("is_weather"), F.lit("weather"))
+            .when(F.col("is_air_quality"), F.lit("air_quality"))
+            .otherwise(F.lit("unknown")),
+        )
         .withColumn(
             "_valid_record",
             F.col("station_id").isNotNull()
@@ -267,11 +276,22 @@ def build_feature_frame(kafka_stream: DataFrame) -> DataFrame:
         )
         .withColumn(
             "_id",
-            F.concat_ws(
-                "|",
-                F.col("station_id"),
-                F.date_format("timestamp", "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"),
-                F.col("source"),
+            F.when(
+                F.col("_record_type") == "weather",
+                F.concat_ws(
+                    "|",
+                    F.col("station_id"),
+                    F.date_format("timestamp", "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"),
+                    F.col("source"),
+                ),
+            ).otherwise(
+                F.concat_ws(
+                    "|",
+                    F.col("station_id"),
+                    F.date_format("timestamp", "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"),
+                    F.col("source"),
+                    F.col("_record_type"),
+                )
             ),
         )
         .select(
