@@ -294,3 +294,58 @@ test('history page limits are validated and unrelated documents are excluded', a
   assert.equal(page.records.length, 1);
   assert.equal(page.records[0].id, 'api-it-weather-day-start');
 });
+
+test('data-quality endpoint returns complete quality report with flow, completeness, and plausibility', async () => {
+  const response = await fetch(
+    `${baseUrl}/api/data-quality/hanoi?startDate=2026-11-07&endDate=2026-11-07`,
+  );
+  assert.equal(response.status, 200);
+  const report = await response.json();
+
+  assert.equal(report.stationId, 'hanoi');
+  assert.equal(report.locationName, 'hanoi');
+  assert.equal(report.window.startDate, '2026-11-07');
+  assert.equal(report.window.endDate, '2026-11-07');
+  assert.equal(report.window.expectedHours, 24);
+
+  // Flow metrics
+  assert.ok(typeof report.flow.isFlowing === 'boolean');
+  assert.ok(report.flow.weather.count >= 1);
+  assert.ok(report.flow.airQuality.count >= 1);
+
+  // Completeness & attributes
+  assert.ok(typeof report.completeness.overallCompletenessPct === 'number');
+  assert.ok(typeof report.completeness.attributes.temperaturePct === 'number');
+  assert.ok(typeof report.completeness.attributes.pm25Pct === 'number');
+  assert.ok(Array.isArray(report.completeness.gaps));
+
+  // Plausibility
+  assert.ok(typeof report.plausibility.scorePct === 'number');
+  assert.ok(report.plausibility.totalRecordsEvaluated >= 3);
+  assert.ok(Array.isArray(report.plausibility.violations));
+
+  // Diagnostics
+  assert.ok(['A', 'B', 'C', 'D', 'F'].includes(report.diagnostics.healthGrade));
+  assert.ok(Array.isArray(report.diagnostics.summary));
+  assert.ok(Array.isArray(report.diagnostics.suggestedBackfills));
+});
+
+test('data-quality endpoint validates location and date bounds', async () => {
+  const unknownLoc = await fetch(`${baseUrl}/api/data-quality/unknown_city`);
+  assert.equal(unknownLoc.status, 400);
+
+  const invalidDates = await fetch(
+    `${baseUrl}/api/data-quality/hanoi?startDate=2026-11-08&endDate=2026-11-07`,
+  );
+  assert.equal(invalidDates.status, 400);
+});
+
+test('data-quality-summary returns fleet-wide coverage', async () => {
+  const response = await fetch(`${baseUrl}/api/data-quality-summary`);
+  assert.equal(response.status, 200);
+  const summary = await response.json();
+  assert.ok(summary.totalConfiguredLocations >= 60);
+  assert.ok(Array.isArray(summary.locations));
+  const hanoiSummary = summary.locations.find((l) => l.stationId === 'hanoi');
+  assert.ok(hanoiSummary);
+});

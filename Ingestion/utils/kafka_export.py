@@ -71,6 +71,16 @@ def export_messages(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text("", encoding="utf-8")
     manifest_path = output_path.with_suffix(output_path.suffix + ".manifest.json")
+
+    # Expand any comma-separated topic arguments
+    expanded_topics: list[str] = []
+    for item in topics:
+        for t in str(item).split(","):
+            c = t.strip()
+            if c and c not in expanded_topics:
+                expanded_topics.append(c)
+    topics = expanded_topics
+
     consumer = build_consumer(bootstrap_servers, group_id, from_beginning)
     started_at = datetime.now(timezone.utc).isoformat()
     partition_ranges: dict[tuple[str, int], dict[str, Any]] = {}

@@ -3,6 +3,7 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import { MongoClient, Document } from 'mongodb';
 import path from 'path';
+import { computeDataQualityReport } from './dataQuality';
 
 dotenv.config({ path: process.env.ENV_FILE ?? path.resolve(process.cwd(), '.env') });
 
@@ -515,6 +516,189 @@ function cloudCoverToCondition(cloudCover: number | null): string {
   if (cloudCover <= 85) return "Mostly Cloudy";
   return "Overcast";
 }
+
+// GET /api/data-quality/:locationId?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD&date=YYYY-MM-DD&collection=...
+// Returns comprehensive data-quality metrics including pipeline flow, internal gaps, physical plausibility, and backfill suggestions.
+app.get("/api/data-quality/:locationId", async (req: Request, res: Response) => {
+  const locationKey = req.params.locationId as string;
+  const stationId = LOCATION_MAP[locationKey];
+  if (!stationId) {
+    res.status(400).json({ error: "Unknown location" });
+    return;
+  }
+
+  const startDateParam = queryString(req.query.startDate);
+  const endDateParam = queryString(req.query.endDate);
+  const dateParam = queryString(req.query.date);
+  const collectionParam = queryString(req.query.collection);
+
+  let start: Date;
+  let end: Date;
+  let mode: 'live' | 'range' | 'single_day';
+  let startDateStr: string;
+  let endDateStr: string;
+
+  if (startDateParam && endDateParam) {
+    if (!isValidDateParam(startDateParam) || !isValidDateParam(endDateParam)) {
+      res.status(400).json({ error: "startDate and endDate must be real YYYY-MM-DD dates." });
+      return;
+    }
+    if (startDateParam > endDateParam) {
+      res.status(400).json({ error: "startDate must be on or before endDate." });
+      return;
+    }
+    start = dateWindow(startDateParam).start;
+    end = dateWindow(endDateParam).end;
+    const dayCount = (end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000);
+    if (dayCount > HISTORY_MAX_DAYS) {
+      res.status(400).json({ error: `Date range cannot exceed ${HISTORY_MAX_DAYS} calendar days.` });
+      return;
+    }
+    mode = 'range';
+    startDateStr = startDateParam;
+    endDateStr = endDateParam;
+  } else if (dateParam) {
+    if (!isValidDateParam(dateParam)) {
+      res.status(400).json({ error: "Invalid date. Expected a real YYYY-MM-DD date." });
+      return;
+    }
+    const window = dateWindow(dateParam);
+    start = window.start;
+    end = window.end;
+    mode = 'single_day';
+    startDateStr = dateParam;
+    endDateStr = dateParam;
+  } else {
+    // Live: last 48 hours to have sufficient context for flow and gap detection
+    end = new Date();
+    start = new Date(end.getTime() - 48 * 60 * 60 * 1000);
+    mode = 'live';
+    const nowUtc7 = new Date(end.getTime() + 7 * 60 * 60 * 1000);
+    const startUtc7 = new Date(start.getTime() + 7 * 60 * 60 * 1000);
+    startDateStr = startUtc7.toISOString().slice(0, 10);
+    endDateStr = nowUtc7.toISOString().slice(0, 10);
+  }
+
+  let targetCollection = COLLECTION_HISTORICAL;
+  if (collectionParam === 'realtime') {
+    targetCollection = COLLECTION_REALTIME;
+  } else if (collectionParam === 'historical') {
+    targetCollection = COLLECTION_HISTORICAL;
+  } else if (mode === 'live') {
+    targetCollection = COLLECTION_REALTIME;
+  }
+
+  try {
+    let docs = (await db
+      .collection(targetCollection)
+      .find({
+        station_id: stationId,
+        timestamp: { $gte: start, $lt: end },
+      })
+      .sort({ timestamp: 1 })
+      .toArray()) as Document[];
+
+    // Fallback: if live mode on realtime collection yielded 0 docs, check historical collection
+    if (mode === 'live' && docs.length === 0 && targetCollection === COLLECTION_REALTIME) {
+      const historicalDocs = (await db
+        .collection(COLLECTION_HISTORICAL)
+        .find({
+          station_id: stationId,
+          timestamp: { $gte: start, $lt: end },
+        })
+        .sort({ timestamp: 1 })
+        .toArray()) as Document[];
+      if (historicalDocs.length > 0) {
+        docs = historicalDocs;
+        targetCollection = COLLECTION_HISTORICAL;
+      }
+    }
+
+    const report = computeDataQualityReport({
+      stationId,
+      locationKey,
+      collection: targetCollection,
+      docs,
+      windowStart: start,
+      windowEnd: end,
+      mode,
+      startDateStr,
+      endDateStr,
+    });
+
+    res.json(report);
+  } catch (err) {
+    console.error("Error computing data quality report:", err);
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// GET /api/data-quality-summary
+// Returns fleet-wide data freshness and record count status across all 63 configured cities
+app.get("/api/data-quality-summary", async (_req: Request, res: Response) => {
+  try {
+    const now = Date.now();
+    const cutoff = new Date(now - 48 * 60 * 60 * 1000);
+
+    const realtimeAgg = await db.collection(COLLECTION_REALTIME).aggregate([
+      { $match: { timestamp: { $gte: cutoff } } },
+      {
+        $group: {
+          _id: "$station_id",
+          count: { $sum: 1 },
+          latestTimestamp: { $max: "$timestamp" },
+        },
+      },
+    ]).toArray();
+
+    const historicalCountAgg = await db.collection(COLLECTION_HISTORICAL).aggregate([
+      {
+        $group: {
+          _id: "$station_id",
+          totalCount: { $sum: 1 },
+          latestTimestamp: { $max: "$timestamp" },
+          earliestTimestamp: { $min: "$timestamp" },
+        },
+      },
+    ]).toArray();
+
+    const locationSummaries = Object.entries(LOCATION_MAP).map(([key, stationId]) => {
+      const rt = realtimeAgg.find((r) => r._id === stationId);
+      const hist = historicalCountAgg.find((h) => h._id === stationId);
+
+      const latestTs = rt?.latestTimestamp ?? hist?.latestTimestamp ?? null;
+      const freshnessMinutes = latestTs ? Math.round((now - new Date(latestTs).getTime()) / 60000) : null;
+      const status =
+        freshnessMinutes === null
+          ? 'no_data'
+          : freshnessMinutes <= 180
+            ? 'fresh'
+            : freshnessMinutes <= 360
+              ? 'stale'
+              : 'degraded';
+
+      return {
+        locationKey: key,
+        stationId,
+        realtime48hCount: rt?.count ?? 0,
+        historicalTotalCount: hist?.totalCount ?? 0,
+        latestTimestamp: latestTs ? new Date(latestTs).toISOString() : null,
+        freshnessMinutes,
+        status,
+      };
+    });
+
+    res.json({
+      timestamp: new Date().toISOString(),
+      activeLocationsCount: locationSummaries.filter((l) => l.status === 'fresh' || l.status === 'stale').length,
+      totalConfiguredLocations: Object.keys(LOCATION_MAP).length,
+      locations: locationSummaries,
+    });
+  } catch (err) {
+    console.error("Error computing data quality summary:", err);
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
 
 connectDB()
   .then(() =>

@@ -123,7 +123,29 @@ For a daily incremental 7-day UTC lookback, register and run the Windows schedul
 .\scripts\run_climate_backfill.ps1 -LookbackDays 7
 ```
 
-### 3d. Browse bounded history
+### 3d. Data Quality observability & smart gap backfill
+
+The dashboard's **Data Quality** tab provides real-time ingestion observability and automated gap diagnosis across four pillars:
+1. **Pipeline Flow & Latency:** Evaluates real-time stream status, observation freshness (minutes since last poll), and hop-by-hop latency statistics (`event_to_ingestion_seconds`, `ingestion_to_kafka_seconds`, and `event_to_kafka_seconds`), flagging clock skew or consumer lags.
+2. **Temporal Completeness & Intermittent Gap Detection:** Detects temporal gaps ($> 105$ minutes) occurring intermittently between successful observations, as well as leading delays or trailing stalls. Displays per-attribute completeness percentages across temperature, humidity, pressure, wind, rain, and PM2.5/AQI.
+3. **Physical Plausibility & Sanity Checks:** Validates incoming records against meteorological constraints ($-10^\circ\text{C} \le T \le 55^\circ\text{C}$, $0\% \le H \le 100\%$, $870 \le P \le 1085\text{ hPa}$, etc.), flags abrupt temperature spikes ($|\Delta T| > 15^\circ\text{C}$ in $<2\text{h}$), and detects stuck flatlined sensors ($\ge 6\text{h}$ identical readings).
+4. **Smart Backfill Action Center:** Automatically aggregates detected gaps into targeted, discrete date ranges and generates executable backfill commands.
+
+To scan and target backfills automatically without manual date calculation:
+
+```powershell
+# Preview missing gaps and targeted backfill jobs without running
+.\scripts\run_smart_backfill.ps1 -LookbackDays 7 -DryRun
+
+# Execute targeted backfills only for detected gaps
+.\scripts\run_smart_backfill.ps1 -LookbackDays 7 -Locations Hanoi
+```
+
+The underlying API endpoints power the dashboard and automation:
+- `GET /api/data-quality/:locationId?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD`
+- `GET /api/data-quality-summary` (fleet-wide matrix for all 63 cities)
+
+### 3e. Browse bounded history
 
 The dashboard's **History** tab shows event-by-event weather and AQI records, including source/schema, the observation timestamp in ICT, nullable measurements, and timing fields. Select a start/end range (maximum 31 calendar days), navigate pages, or download the current page as CSV. The history endpoint returns stable cursor pages and excludes documents without weather or AQI measurements:
 

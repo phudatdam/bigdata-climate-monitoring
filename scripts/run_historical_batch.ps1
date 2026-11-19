@@ -25,10 +25,19 @@ try {
         $env:SPARK_SQL_SHUFFLE_PARTITIONS = "8"
     }
 
+    $normalizedTopics = @()
+    foreach ($t in $Topics) {
+        if ($t -match ",") {
+            $normalizedTopics += ($t -split ",") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+        } else {
+            $normalizedTopics += $t
+        }
+    }
+
     $exportArguments = @(
         "Ingestion\scripts\export_kafka_to_file.py",
         "--topics"
-    ) + $Topics + @(
+    ) + $normalizedTopics + @(
         "--from-beginning",
         "--max-messages",
         "0",

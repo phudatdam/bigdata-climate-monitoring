@@ -6,6 +6,7 @@ import { useWeatherData } from "./hooks/useWeatherData";
 import { useForecastData } from "./hooks/useForecastData";
 import { getVietnamDateAndHour } from "./utils/observationTime";
 import { HistoryBrowser } from "./components/HistoryBrowser";
+import { DataQualityDashboard } from "./components/DataQualityDashboard";
 
 const locations = [
   { id: "angiang", name: "An Giang" },
@@ -77,7 +78,7 @@ const INITIAL_VIETNAM_TIME = getVietnamDateAndHour();
 const TODAY = INITIAL_VIETNAM_TIME.date;
 const CURRENT_HOUR = INITIAL_VIETNAM_TIME.hour;
 
-type Tab = 'overview' | 'history' | 'forecast';
+type Tab = 'overview' | 'history' | 'data-quality' | 'forecast';
 
 export default function App() {
   const [selectedLocation, setSelectedLocation] = useState("hanoi");
@@ -177,7 +178,7 @@ export default function App() {
 
           {/* Tabs */}
           <div className="flex border-b border-gray-200">
-            {([['overview', 'Overview'], ['history', 'History'], ['forecast', '6-Hour Forecast']] as [Tab, string][]).map(([id, label]) => (
+            {([['overview', 'Overview'], ['history', 'History'], ['data-quality', 'Data Quality'], ['forecast', '6-Hour Forecast']] as [Tab, string][]).map(([id, label]) => (
               <button
                 key={id}
                 onClick={() => setActiveTab(id)}
@@ -194,6 +195,15 @@ export default function App() {
 
           {activeTab === 'history' && (
             <HistoryBrowser locationId={selectedLocation} locationName={locationName} />
+          )}
+
+          {activeTab === 'data-quality' && (
+            <DataQualityDashboard
+              locationId={selectedLocation}
+              locationName={locationName}
+              selectedDate={selectedDate}
+              isLive={isLive}
+            />
           )}
 
           {/* ── Overview tab ── */}

@@ -157,6 +157,22 @@ class KafkaExportTests(unittest.TestCase):
 
         self.assertEqual(first_path.read_bytes(), second_path.read_bytes())
 
+    def test_export_expands_comma_separated_topics(self):
+        messages = [
+            FakeMessage("weather.raw.batch", 0, 0, b'{"w":1}'),
+            FakeMessage("weather.raw.batch", 0, 1, error=FakeError(KafkaError._PARTITION_EOF)),
+            FakeMessage("air_quality.raw.batch", 0, 0, b'{"a":1}'),
+            FakeMessage("air_quality.raw.batch", 0, 1, error=FakeError(KafkaError._PARTITION_EOF)),
+        ]
+        output_path, manifest_path, manifest = self._run_export(
+            messages,
+            topics=["weather.raw.batch,air_quality.raw.batch"],
+        )
+        self.assertTrue(manifest["complete"])
+        self.assertEqual(manifest["exported_count"], 2)
+        self.assertIn("weather.raw.batch", manifest["topic_counts"])
+        self.assertIn("air_quality.raw.batch", manifest["topic_counts"])
+
 
 if __name__ == "__main__":
     unittest.main()

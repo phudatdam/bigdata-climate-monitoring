@@ -72,6 +72,123 @@ export interface HistoricalPage {
   nextCursor: string | null;
 }
 
+export interface LatencyMetric {
+  avg: number | null;
+  p95: number | null;
+  max: number | null;
+}
+
+export interface StreamFlowStatus {
+  count: number;
+  latestTimestamp: string | null;
+  freshnessMinutes: number | null;
+  status: 'fresh' | 'stale' | 'degraded' | 'inactive';
+}
+
+export interface InternalGap {
+  stream: 'weather' | 'air_quality';
+  gapStart: string;
+  gapEnd: string;
+  missingHours: number;
+  type: 'internal_gap' | 'leading_gap' | 'trailing_gap';
+  description: string;
+}
+
+export interface PlausibilityViolation {
+  timestamp: string;
+  stream: 'weather' | 'air_quality';
+  source: string | null;
+  rule: string;
+  field: string;
+  value: number | string | null;
+  expected: string;
+  severity: 'warning' | 'error';
+  message: string;
+}
+
+export interface SuggestedBackfill {
+  startDate: string;
+  endDate: string;
+  missingHours: number;
+  streams: Array<'weather' | 'air_quality'>;
+  locationKey: string;
+  stationId: string;
+  reason: string;
+  suggestedCommand: string;
+}
+
+export interface DataQualityReport {
+  stationId: string;
+  locationName: string;
+  collection: string;
+  window: {
+    startDate: string;
+    endDate: string;
+    startIso: string;
+    endIso: string;
+    expectedHours: number;
+    mode: 'live' | 'range' | 'single_day';
+  };
+  flow: {
+    isFlowing: boolean;
+    status: 'optimal' | 'lagging' | 'stale' | 'inactive';
+    weather: StreamFlowStatus;
+    airQuality: StreamFlowStatus;
+    latencySeconds: {
+      eventToIngestion: LatencyMetric;
+      ingestionToKafka: LatencyMetric;
+      eventToKafka: LatencyMetric;
+      clockSkewDetected: boolean;
+    };
+  };
+  completeness: {
+    overallCompletenessPct: number;
+    weatherCompletenessPct: number;
+    airQualityCompletenessPct: number;
+    weatherHoursPresent: number;
+    airQualityHoursPresent: number;
+    attributes: {
+      temperaturePct: number;
+      humidityPct: number;
+      pressurePct: number;
+      windSpeedPct: number;
+      precipitationPct: number;
+      pm25Pct: number;
+      aqiPct: number;
+    };
+    gaps: InternalGap[];
+  };
+  plausibility: {
+    scorePct: number;
+    totalRecordsEvaluated: number;
+    validRecordsCount: number;
+    violationCount: number;
+    violations: PlausibilityViolation[];
+  };
+  diagnostics: {
+    healthGrade: 'A' | 'B' | 'C' | 'D' | 'F';
+    summary: string[];
+    suggestedBackfills: SuggestedBackfill[];
+  };
+}
+
+export interface FleetLocationSummary {
+  locationKey: string;
+  stationId: string;
+  realtime48hCount: number;
+  historicalTotalCount: number;
+  latestTimestamp: string | null;
+  freshnessMinutes: number | null;
+  status: 'fresh' | 'stale' | 'degraded' | 'no_data';
+}
+
+export interface FleetSummaryReport {
+  timestamp: string;
+  activeLocationsCount: number;
+  totalConfiguredLocations: number;
+  locations: FleetLocationSummary[];
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export async function fetchHourlyWeather(locationId: string, date?: string): Promise<HourlyWeatherResponse[]> {
@@ -103,4 +220,32 @@ export async function fetchForecast(locationId: string, date?: string, hour?: nu
   if (hour !== undefined) params.set('hour', String(hour));
   const q = params.toString() ? `?${params}` : '';
   return get<import('../types/weather').ForecastData>(`/api/forecast/${locationId}${q}`);
+}
+
+export async function fetchDataQuality(
+  locationId: string,
+  options?: {
+    startDate?: string;
+    endDate?: string;
+    date?: string;
+    collection?: 'realtime' | 'historical';
+  },
+  signal?: AbortSignal,
+): Promise<DataQualityReport> {
+  const params = new URLSearchParams();
+  if (options?.startDate && options?.endDate) {
+    params.set('startDate', options.startDate);
+    params.set('endDate', options.endDate);
+  } else if (options?.date) {
+    params.set('date', options.date);
+  }
+  if (options?.collection) {
+    params.set('collection', options.collection);
+  }
+  const q = params.toString() ? `?${params}` : '';
+  return get<DataQualityReport>(`/api/data-quality/${locationId}${q}`, signal);
+}
+
+export async function fetchFleetQualitySummary(signal?: AbortSignal): Promise<FleetSummaryReport> {
+  return get<FleetSummaryReport>('/api/data-quality-summary', signal);
 }

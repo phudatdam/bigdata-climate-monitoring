@@ -113,9 +113,8 @@ $historicalArguments = @(
     "Bypass",
     "-File",
     "`"$historicalScript`"",
-    "-Topics",
-    ($topics -join ",")
-)
+    "-Topics"
+) + $topics
 if ($BuildProcessor) {
     $historicalArguments += "-BuildProcessor"
 }

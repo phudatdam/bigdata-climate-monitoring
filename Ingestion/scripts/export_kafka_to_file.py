@@ -75,7 +75,13 @@ def build_output_path(output_arg: str | None) -> Path:
 def main() -> None:
     args = parse_args()
     bootstrap_servers = load_bootstrap_servers(KAFKA_CONFIG_PATH)
-    topics = args.topics or load_default_topics(TOPICS_CONFIG_PATH)
+    raw_topics = args.topics or load_default_topics(TOPICS_CONFIG_PATH)
+    topics: list[str] = []
+    for item in raw_topics:
+        for topic in str(item).split(","):
+            cleaned = topic.strip()
+            if cleaned and cleaned not in topics:
+                topics.append(cleaned)
     output_path = build_output_path(args.output)
     group_id = args.group_id or f"kafka-export-{uuid.uuid4()}"
 
